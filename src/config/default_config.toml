@@ -1,0 +1,58 @@
+schema_version = 1
+
+[workspace]
+harness_dir = ".agent-harness"
+git_worktree_enabled = false
+
+[storage]
+retention_days = 30
+max_artifact_mb = 100
+
+[providers.claude]
+binary = "claude"
+allowed_modes = ["interactive"]
+interactive_only = true
+non_interactive_enabled = false
+env_passthrough = ["ANTHROPIC_API_KEY"]
+
+[providers.codex]
+binary = "codex"
+allowed_modes = ["non_interactive", "review", "test", "commit"]
+interactive_only = false
+non_interactive_enabled = true
+env_passthrough = ["OPENAI_API_KEY"]
+
+[providers.cursor]
+binary = "cursor"
+allowed_modes = ["review"]
+interactive_only = false
+non_interactive_enabled = false
+env_passthrough = []
+
+[providers.shell]
+binary = "sh"
+allowed_modes = ["non_interactive", "test", "ci"]
+interactive_only = false
+non_interactive_enabled = true
+env_passthrough = []
+
+[roles.reviewer]
+provider = "codex"
+safety_mode = "read_only"
+
+[roles.tester]
+provider = "shell"
+safety_mode = "workspace_write"
+test_commands = ["cargo test", "npm test"]
+
+[roles.committer]
+provider = "codex"
+safety_mode = "workspace_write"
+
+[roles.ci_watcher]
+provider = "shell"
+safety_mode = "read_only"
+
+[roles.e2e_runner]
+provider = "shell"
+safety_mode = "workspace_write"
