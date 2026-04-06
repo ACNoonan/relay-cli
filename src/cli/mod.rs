@@ -112,6 +112,9 @@ pub enum Commands {
         #[command(subcommand)]
         action: ConfigAction,
     },
+
+    /// Launch the interactive TUI dashboard
+    Tui,
 }
 
 #[derive(Subcommand)]

@@ -14,6 +14,7 @@ mod schema;
 mod session;
 mod storage;
 mod testing;
+mod tui;
 
 use clap::Parser;
 use cli::{
@@ -110,5 +111,7 @@ async fn main() -> anyhow::Result<()> {
             ConfigAction::Edit => cli::cmd_config_edit().await,
             ConfigAction::Reset => cli::cmd_config_reset().await,
         },
+
+        Commands::Tui => tui::run().await,
     }
 }

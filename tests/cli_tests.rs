@@ -21,7 +21,17 @@ fn help_shows_all_commands() {
         .stdout(predicate::str::contains("commit"))
         .stdout(predicate::str::contains("ci"))
         .stdout(predicate::str::contains("artifacts"))
-        .stdout(predicate::str::contains("config"));
+        .stdout(predicate::str::contains("config"))
+        .stdout(predicate::str::contains("tui"));
+}
+
+#[test]
+fn tui_help_works() {
+    relay()
+        .args(["tui", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("interactive TUI dashboard"));
 }
 
 #[test]
