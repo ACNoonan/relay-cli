@@ -1,4 +1,5 @@
 mod artifacts;
+mod bridge;
 mod ci;
 mod cli;
 mod commit;
@@ -113,5 +114,23 @@ async fn main() -> anyhow::Result<()> {
         },
 
         Commands::Tui => tui::run().await,
+        Commands::Bridge {
+            prompt,
+            claude_model,
+            claude_binary,
+            gpt_model,
+            reviewer_prompt_file,
+            resume,
+        } => {
+            bridge::run(bridge::BridgeOptions {
+                prompt,
+                claude_model,
+                claude_binary,
+                gpt_model,
+                reviewer_prompt_file,
+                resume_session_id: resume,
+            })
+            .await
+        }
     }
 }

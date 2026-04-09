@@ -22,7 +22,8 @@ fn help_shows_all_commands() {
         .stdout(predicate::str::contains("ci"))
         .stdout(predicate::str::contains("artifacts"))
         .stdout(predicate::str::contains("config"))
-        .stdout(predicate::str::contains("tui"));
+        .stdout(predicate::str::contains("tui"))
+        .stdout(predicate::str::contains("bridge"));
 }
 
 #[test]
@@ -32,6 +33,19 @@ fn tui_help_works() {
         .assert()
         .success()
         .stdout(predicate::str::contains("interactive TUI dashboard"));
+}
+
+#[test]
+fn bridge_help_works() {
+    relay()
+        .args(["bridge", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Claude -> GPT verification bridge",
+        ))
+        .stdout(predicate::str::contains("--prompt"))
+        .stdout(predicate::str::contains("--gpt-model"));
 }
 
 #[test]

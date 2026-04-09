@@ -115,6 +115,28 @@ pub enum Commands {
 
     /// Launch the interactive TUI dashboard
     Tui,
+
+    /// Run the live Claude -> GPT verification bridge
+    Bridge {
+        /// Prompt sent to Claude
+        #[arg(long)]
+        prompt: String,
+        /// Claude model override
+        #[arg(long)]
+        claude_model: Option<String>,
+        /// Claude binary name/path
+        #[arg(long, default_value = "claude")]
+        claude_binary: String,
+        /// GPT model for verification
+        #[arg(long, default_value = "gpt-5.4")]
+        gpt_model: String,
+        /// Optional reviewer system prompt file
+        #[arg(long)]
+        reviewer_prompt_file: Option<String>,
+        /// Resume an existing Claude session ID
+        #[arg(long)]
+        resume: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -175,7 +197,10 @@ pub enum ReviewAction {
         #[arg(long)]
         model: Option<String>,
         /// Goal description
-        #[arg(long, default_value = "Review the code for bugs, security issues, and quality")]
+        #[arg(
+            long,
+            default_value = "Review the code for bugs, security issues, and quality"
+        )]
         goal: String,
     },
     /// Review using Cursor

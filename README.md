@@ -35,6 +35,9 @@ relay capture last-response --file response.md
 # Send to Codex for review
 relay review codex
 
+# Experimental: stream Claude -> GPT verification in split-pane TUI
+relay bridge --prompt "Review and improve src/provider/claude.rs"
+
 # Run tests
 relay test run --command "cargo test"
 
@@ -93,6 +96,23 @@ Relay is **artifact-first**: every handoff between agents produces a saved manif
 | `relay config show` | Print current configuration |
 | `relay config edit` | Open config in `$EDITOR` |
 | `relay logs` | View session logs |
+| `relay bridge --prompt "..."` | Experimental live Claude -> GPT verification bridge |
+
+### Bridge Keybindings
+
+When running `relay bridge`:
+
+- `Enter` send input prompt to current target
+- `Ctrl+T` toggle prompt target (`Claude` / `GPT`)
+- `Tab` switch active output pane
+- `Ctrl+R` route active pane output to the other model
+- `Ctrl+E` rerun the previous operation
+- `Ctrl+N` clear Claude session and start a new context
+- `Up`/`Down`/`PgUp`/`PgDn`/`Home`/`End` scroll active pane output
+- `Ctrl+F` enter search mode for the active pane (`Enter` to apply)
+- `n` / `N` jump to next / previous search match
+- `Esc` clear the prompt input
+- `q` or `Ctrl+C` quit
 
 ## Providers
 
