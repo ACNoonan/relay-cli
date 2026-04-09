@@ -131,9 +131,6 @@ pub fn handle_action(state: &mut AppState, action: Action) -> bool {
                 state.filter_text.pop();
             }
         }
-        Action::ConfirmFilter => {
-            state.filter_active = false;
-        }
         Action::Tick | Action::None => {}
     }
 

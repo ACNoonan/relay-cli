@@ -108,3 +108,50 @@ impl HarnessConfig {
         self.roles.get(name)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn default_config_has_expected_contract() {
+        let cfg = HarnessConfig::default_config().expect("default config should parse");
+        assert_eq!(cfg.schema_version, 1);
+        assert_eq!(cfg.workspace.harness_dir, ".agent-harness");
+        assert_eq!(cfg.storage.retention_days, 30);
+        assert_eq!(cfg.storage.max_artifact_mb, 100);
+        assert!(cfg.provider_config("claude").is_some());
+        assert!(cfg.provider_config("codex").is_some());
+        assert!(cfg.role_config("reviewer").is_some());
+        assert!(cfg.role_config("tester").is_some());
+    }
+
+    #[test]
+    fn save_and_load_round_trip() {
+        let tmp = TempDir::new().expect("temp dir should be created");
+        let path = Utf8PathBuf::from_path_buf(tmp.path().join("config.toml"))
+            .expect("temp path should be valid UTF-8");
+        let cfg = HarnessConfig::default_config().expect("default config should parse");
+        cfg.save(&path).expect("config should save");
+
+        let loaded = HarnessConfig::load(&path).expect("config should load");
+        assert_eq!(loaded.schema_version, cfg.schema_version);
+        assert_eq!(loaded.workspace.harness_dir, cfg.workspace.harness_dir);
+        assert_eq!(loaded.storage.retention_days, cfg.storage.retention_days);
+        assert_eq!(loaded.storage.max_artifact_mb, cfg.storage.max_artifact_mb);
+        assert_eq!(loaded.providers.len(), cfg.providers.len());
+        assert_eq!(loaded.roles.len(), cfg.roles.len());
+    }
+
+    #[test]
+    fn load_invalid_toml_fails() {
+        let tmp = TempDir::new().expect("temp dir should be created");
+        let path = Utf8PathBuf::from_path_buf(tmp.path().join("broken.toml"))
+            .expect("temp path should be valid UTF-8");
+        std::fs::write(path.as_std_path(), "schema_version = {").expect("write should succeed");
+
+        let result = HarnessConfig::load(&path);
+        assert!(result.is_err());
+    }
+}

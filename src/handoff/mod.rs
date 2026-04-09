@@ -9,6 +9,7 @@ use crate::schema::{
 use crate::storage::Storage;
 
 /// Create a handoff manifest and persist it.
+#[allow(clippy::too_many_arguments)]
 pub fn create_handoff(
     storage: &Storage,
     source_session: Option<Uuid>,

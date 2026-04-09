@@ -1,0 +1,55 @@
+name: Bug report
+description: Report a reproducible problem in relay-cli
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Please include enough detail for maintainers to reproduce quickly.
+  - type: input
+    id: version
+    attributes:
+      label: relay version
+      description: Output of `relay --version`
+      placeholder: relay 0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, shell, Rust version, and anything else relevant
+      placeholder: macOS 14, zsh, rustc 1.78.0
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands and inputs used
+      placeholder: |
+        1. relay init
+        2. relay doctor
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or output
+      description: Paste relevant command output or stack traces
+      render: shell

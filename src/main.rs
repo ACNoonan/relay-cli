@@ -1,27 +1,9 @@
-mod artifacts;
-mod bridge;
-mod ci;
-mod cli;
-mod commit;
-mod config;
-mod e2e;
-mod errors;
-mod git;
-mod handoff;
-mod process;
-mod provider;
-mod review;
-mod schema;
-mod session;
-mod storage;
-mod testing;
-mod tui;
-
 use clap::Parser;
-use cli::{
+use relay_cli::cli::{
     ArtifactAction, CaptureAction, CiAction, Cli, Commands, CommitAction, ConfigAction,
     ReviewAction, SessionAction, TestAction,
 };
+use relay_cli::{bridge, cli, tui};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]

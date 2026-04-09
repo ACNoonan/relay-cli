@@ -34,8 +34,9 @@ pub struct BridgeOptions {
     pub resume_session_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum PromptTarget {
+    #[default]
     Claude,
     Gpt,
 }
@@ -56,14 +57,9 @@ impl PromptTarget {
     }
 }
 
-impl Default for PromptTarget {
-    fn default() -> Self {
-        Self::Claude
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum ActivePane {
+    #[default]
     Claude,
     Gpt,
 }
@@ -74,12 +70,6 @@ impl ActivePane {
             ActivePane::Claude => ActivePane::Gpt,
             ActivePane::Gpt => ActivePane::Claude,
         };
-    }
-}
-
-impl Default for ActivePane {
-    fn default() -> Self {
-        Self::Claude
     }
 }
 

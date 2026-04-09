@@ -128,7 +128,7 @@ fn extract_json_block(text: &str) -> Option<String> {
 /// Format a ReviewResult as a markdown report.
 pub fn format_review_markdown(review: &ReviewResult) -> String {
     let mut md = String::new();
-    md.push_str(&format!("# Review Report\n\n"));
+    md.push_str("# Review Report\n\n");
     md.push_str(&format!("**Provider:** {}\n", review.provider));
     if let Some(ref m) = review.model {
         md.push_str(&format!("**Model:** {}\n", m));

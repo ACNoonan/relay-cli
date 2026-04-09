@@ -45,14 +45,14 @@ pub fn load_logs(
 
     let lines = if path.as_std_path().is_file() {
         match std::fs::read_to_string(path.as_std_path()) {
-            Ok(content) => content.lines().map(|l| strip_ansi(l)).collect(),
+            Ok(content) => content.lines().map(strip_ansi).collect(),
             Err(_) => vec![],
         }
     } else {
         vec![]
     };
 
-    LogBuffer { lines, source }
+    LogBuffer { lines }
 }
 
 /// Simple ANSI escape stripping.
@@ -116,15 +116,11 @@ fn build_overview(storage: &Storage, initialized: bool) -> OverviewSnapshot {
             .count(),
     };
 
-    let recent_sessions: Vec<SessionRow> =
-        sessions.iter().take(5).map(|s| session_to_row(s)).collect();
+    let recent_sessions: Vec<SessionRow> = sessions.iter().take(5).map(session_to_row).collect();
 
     let all_artifacts = artifacts::list_artifacts(storage).unwrap_or_default();
-    let recent_artifacts: Vec<ArtifactRow> = all_artifacts
-        .iter()
-        .take(5)
-        .map(|a| artifact_to_row(a))
-        .collect();
+    let recent_artifacts: Vec<ArtifactRow> =
+        all_artifacts.iter().take(5).map(artifact_to_row).collect();
 
     let (recent_reviews, _) = build_reviews(storage);
     let recent_reviews: Vec<ReviewRow> = recent_reviews.into_iter().take(5).collect();
@@ -144,14 +140,14 @@ fn build_overview(storage: &Storage, initialized: bool) -> OverviewSnapshot {
 
 fn build_sessions(storage: &Storage) -> (Vec<SessionRow>, Vec<SessionDetail>) {
     let sessions = session::list_sessions(storage).unwrap_or_default();
-    let rows: Vec<SessionRow> = sessions.iter().map(|s| session_to_row(s)).collect();
-    let details: Vec<SessionDetail> = sessions.iter().map(|s| session_to_detail(s)).collect();
+    let rows: Vec<SessionRow> = sessions.iter().map(session_to_row).collect();
+    let details: Vec<SessionDetail> = sessions.iter().map(session_to_detail).collect();
     (rows, details)
 }
 
 fn build_artifacts(storage: &Storage) -> Vec<ArtifactRow> {
     let all = artifacts::list_artifacts(storage).unwrap_or_default();
-    all.iter().map(|a| artifact_to_row(a)).collect()
+    all.iter().map(artifact_to_row).collect()
 }
 
 fn build_reviews(storage: &Storage) -> (Vec<ReviewRow>, Vec<ReviewDetail>) {
@@ -175,18 +171,15 @@ fn build_reviews(storage: &Storage) -> (Vec<ReviewRow>, Vec<ReviewDetail>) {
         };
 
         rows.push(ReviewRow {
-            id: result.id,
             short_id: result.id.to_string()[..8].to_string(),
             provider: result.provider.clone(),
             verdict: format!("{:?}", result.verdict),
             created_at: result.created_at,
             goal: h.goal.clone(),
-            summary: result.summary.clone(),
             finding_count: result.findings.len(),
         });
 
         details.push(ReviewDetail {
-            id: result.id,
             provider: result.provider.clone(),
             model: result.model.clone(),
             verdict: format!("{:?}", result.verdict),
@@ -218,7 +211,6 @@ fn session_to_row(s: &crate::schema::SessionRecord) -> SessionRow {
         role: format!("{:?}", s.role),
         status: format!("{:?}", s.status),
         started_at: s.started_at,
-        model: s.model.clone(),
     }
 }
 

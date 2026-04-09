@@ -144,6 +144,14 @@ fn render_review_detail(f: &mut Frame, area: Rect, state: &AppState, styles: &St
                 format!("     {}", msg),
                 styles.base(),
             )));
+
+            if let Some(suggestion) = &finding.suggestion {
+                let suggestion_line: String = suggestion.chars().take(max_width - 6).collect();
+                lines.push(Line::from(Span::styled(
+                    format!("     suggestion: {}", suggestion_line),
+                    styles.dim(),
+                )));
+            }
         }
     }
 

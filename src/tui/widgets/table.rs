@@ -9,6 +9,7 @@ use crate::tui::theme::Styles;
 use crate::tui::widgets::chrome::retro_block;
 
 /// Render a styled table with selection support.
+#[allow(clippy::too_many_arguments)]
 pub fn render_table(
     f: &mut Frame,
     area: Rect,

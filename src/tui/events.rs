@@ -20,7 +20,6 @@ pub enum Action {
     StartFilter,
     FilterChar(char),
     FilterBackspace,
-    ConfirmFilter,
     Tick,
     None,
 }
@@ -56,8 +55,10 @@ fn map_key(key: KeyEvent) -> Action {
         KeyCode::Char('r') => Action::Refresh,
         KeyCode::Char('t') => Action::ToggleLogSource,
         KeyCode::Char('/') => Action::StartFilter,
+        KeyCode::Backspace => Action::FilterBackspace,
         KeyCode::Enter => Action::Select,
         KeyCode::Esc => Action::Back,
+        KeyCode::Char(c) => Action::FilterChar(c),
         KeyCode::Tab => {
             if key.modifiers.contains(KeyModifiers::SHIFT) {
                 Action::PrevPane

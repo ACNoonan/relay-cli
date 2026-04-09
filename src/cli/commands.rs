@@ -208,8 +208,8 @@ pub async fn cmd_session_list() -> Result<()> {
     }
 
     println!(
-        "{:<10} {:<12} {:<20} {:<12} {}",
-        "ID", "PROVIDER", "ROLE", "STATUS", "STARTED"
+        "{:<10} {:<12} {:<20} {:<12} STARTED",
+        "ID", "PROVIDER", "ROLE", "STATUS"
     );
     println!("{}", "-".repeat(70));
     for s in &sessions {
@@ -468,7 +468,7 @@ pub async fn cmd_review_history() -> Result<()> {
         return Ok(());
     }
 
-    println!("{:<10} {:<12} {:<12} {}", "ID", "PROVIDER", "DATE", "GOAL");
+    println!("{:<10} {:<12} {:<12} GOAL", "ID", "PROVIDER", "DATE");
     println!("{}", "-".repeat(60));
     for h in &reviews {
         println!(
@@ -651,7 +651,7 @@ pub async fn cmd_artifacts_list() -> Result<()> {
         return Ok(());
     }
 
-    println!("{:<10} {:<18} {:<22} {}", "ID", "TYPE", "CREATED", "PATH");
+    println!("{:<10} {:<18} {:<22} PATH", "ID", "TYPE", "CREATED");
     println!("{}", "-".repeat(80));
     for a in &all {
         println!(

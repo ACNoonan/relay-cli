@@ -92,7 +92,6 @@ pub struct SessionRow {
     pub role: String,
     pub status: String,
     pub started_at: DateTime<Utc>,
-    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -120,19 +119,16 @@ pub struct ArtifactRow {
 
 #[derive(Debug, Clone)]
 pub struct ReviewRow {
-    pub id: Uuid,
     pub short_id: String,
     pub provider: String,
     pub verdict: String,
     pub created_at: DateTime<Utc>,
     pub goal: String,
-    pub summary: String,
     pub finding_count: usize,
 }
 
 #[derive(Debug, Clone)]
 pub struct ReviewDetail {
-    pub id: Uuid,
     pub provider: String,
     pub model: Option<String>,
     pub verdict: String,
@@ -156,7 +152,6 @@ pub struct FindingRow {
 #[derive(Debug, Clone, Default)]
 pub struct LogBuffer {
     pub lines: Vec<String>,
-    pub source: LogSource,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -231,20 +226,12 @@ impl AppState {
         }
     }
 
-    pub fn selected_session(&self) -> Option<&SessionRow> {
-        self.data.sessions.get(self.session_index)
-    }
-
     pub fn selected_session_detail(&self) -> Option<&SessionDetail> {
         self.data.session_details.get(self.session_index)
     }
 
     pub fn selected_artifact(&self) -> Option<&ArtifactRow> {
         self.data.artifacts.get(self.artifact_index)
-    }
-
-    pub fn selected_review(&self) -> Option<&ReviewRow> {
-        self.data.reviews.get(self.review_index)
     }
 
     pub fn selected_review_detail(&self) -> Option<&ReviewDetail> {

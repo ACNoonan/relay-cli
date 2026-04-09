@@ -104,3 +104,41 @@ pub fn format_test_markdown(result: &TestResult) -> String {
 
     md
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use camino::Utf8PathBuf;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn run_tests_persists_result_and_passes() {
+        let tmp = TempDir::new().expect("temp dir should be created");
+        let root = Utf8PathBuf::from_path_buf(tmp.path().join(".agent-harness"))
+            .expect("temp path should be valid UTF-8");
+        let storage = Storage::new(root);
+        storage.initialize().expect("storage should initialize");
+
+        let commands = vec!["true".to_string()];
+        let result = run_tests(&storage, &commands, None)
+            .await
+            .expect("test command should run");
+
+        assert_eq!(result.schema_version, SCHEMA_VERSION);
+        assert!(matches!(result.verdict, Verdict::Pass));
+        assert_eq!(result.commands_run.len(), 1);
+        assert_eq!(result.commands_run[0].command, "true");
+
+        let result_path = storage
+            .artifacts_dir()
+            .join(result.id.to_string())
+            .join("test-result.json");
+        assert!(result_path.as_std_path().is_file());
+
+        let saved = std::fs::read_to_string(result_path.as_std_path())
+            .expect("test result JSON should be readable");
+        let parsed: TestResult =
+            serde_json::from_str(&saved).expect("test result JSON should deserialize");
+        assert_eq!(parsed.id, result.id);
+    }
+}

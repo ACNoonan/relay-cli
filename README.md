@@ -1,5 +1,7 @@
 # relay
 
+[![CI](https://github.com/ACNoonan/relay-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/ACNoonan/relay-cli/actions/workflows/ci.yml)
+
 A local agent harness CLI that orchestrates Claude Code, Codex, Cursor, and utility agents through their native CLIs.
 
 Relay lets you work interactively in Claude Code, then hand off responses and transcripts to other agents for review, testing, commit prep, CI tracking, and end-to-end execution — all through a single CLI with local, inspectable state.
@@ -195,8 +197,14 @@ Non-interactive Claude automation is disabled by default. `relay doctor` will wa
 ## Development
 
 ```bash
+# Format check
+cargo fmt --all -- --check
+
+# Lint
+cargo clippy --all-targets -- -D clippy::dbg_macro -D clippy::todo -D clippy::unimplemented
+
 # Run tests
-cargo test
+cargo test --all-targets
 
 # Build
 cargo build
@@ -204,6 +212,13 @@ cargo build
 # Run with verbose logging
 relay -v doctor
 ```
+
+### Contributor Workflow
+
+1. Fork and create a branch for your change.
+2. Add or update tests when behavior changes.
+3. Run `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D clippy::dbg_macro -D clippy::todo -D clippy::unimplemented`, and `cargo test --all-targets`.
+4. Open a PR with a short summary and test plan.
 
 ## License
 

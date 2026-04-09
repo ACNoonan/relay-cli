@@ -93,3 +93,49 @@ pub fn read_artifact(storage: &Storage, id: Uuid) -> Result<(ArtifactManifest, S
 
     Ok((manifest, content))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use camino::Utf8PathBuf;
+    use tempfile::TempDir;
+
+    fn temp_storage() -> (Storage, TempDir) {
+        let tmp = TempDir::new().expect("temp dir should be created");
+        let root = Utf8PathBuf::from_path_buf(tmp.path().join(".agent-harness"))
+            .expect("temp path should be valid UTF-8");
+        let storage = Storage::new(root);
+        storage.initialize().expect("storage should initialize");
+        (storage, tmp)
+    }
+
+    #[test]
+    fn save_list_and_read_artifact_round_trip() {
+        let (storage, _tmp) = temp_storage();
+        let session_id = Uuid::new_v4();
+        let content = "# Captured output\n\nhello";
+
+        let manifest = save_artifact(
+            &storage,
+            session_id,
+            ArtifactType::LastResponse,
+            content,
+            None,
+        )
+        .expect("artifact should save");
+
+        assert_eq!(manifest.schema_version, crate::schema::SCHEMA_VERSION);
+        assert_eq!(manifest.session_id, session_id);
+        assert_eq!(manifest.artifact_type, ArtifactType::LastResponse);
+        assert!(manifest.path.as_std_path().is_file());
+
+        let all = list_artifacts(&storage).expect("artifacts should list");
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].id, manifest.id);
+
+        let (read_manifest, read_content) =
+            read_artifact(&storage, manifest.id).expect("artifact should read");
+        assert_eq!(read_manifest.id, manifest.id);
+        assert_eq!(read_content, content);
+    }
+}
