@@ -24,11 +24,8 @@ pub fn render_log_view(
     f.render_widget(block, area);
 
     if buffer.lines.is_empty() {
-        let empty = Paragraph::new(Line::from(Span::styled(
-            "NO LOG DATA",
-            styles.dim(),
-        )))
-        .alignment(ratatui::layout::Alignment::Center);
+        let empty = Paragraph::new(Line::from(Span::styled("NO LOG DATA", styles.dim())))
+            .alignment(ratatui::layout::Alignment::Center);
         let y = inner.y + inner.height / 3;
         if y < inner.y + inner.height {
             let msg_area = Rect::new(inner.x, y, inner.width, 1);

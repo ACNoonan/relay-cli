@@ -12,13 +12,7 @@ use crate::tui::widgets::table::render_table;
 
 pub fn render(f: &mut Frame, area: Rect, state: &AppState, styles: &Styles) {
     if state.data.reviews.is_empty() {
-        render_empty(
-            f,
-            area,
-            "REVIEWS",
-            "NO REVIEWS AVAILABLE",
-            styles,
-        );
+        render_empty(f, area, "REVIEWS", "NO REVIEWS AVAILABLE", styles);
         return;
     }
 
@@ -85,10 +79,7 @@ fn render_review_detail(f: &mut Frame, area: Rect, state: &AppState, styles: &St
     let mut lines = vec![
         Line::from(vec![
             Span::styled("  VERDICT   ", styles.label()),
-            Span::styled(
-                detail.verdict.clone(),
-                styles.status_style(&detail.verdict),
-            ),
+            Span::styled(detail.verdict.clone(), styles.status_style(&detail.verdict)),
         ]),
         Line::from(vec![
             Span::styled("  PROVIDER  ", styles.label()),

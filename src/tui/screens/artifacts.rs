@@ -12,13 +12,7 @@ use crate::tui::widgets::table::render_table;
 
 pub fn render(f: &mut Frame, area: Rect, state: &AppState, styles: &Styles) {
     if state.data.artifacts.is_empty() {
-        render_empty(
-            f,
-            area,
-            "ARTIFACTS",
-            "NO ARTIFACTS AVAILABLE",
-            styles,
-        );
+        render_empty(f, area, "ARTIFACTS", "NO ARTIFACTS AVAILABLE", styles);
         return;
     }
 
@@ -114,10 +108,7 @@ fn render_artifact_preview(f: &mut Frame, area: Rect, state: &AppState, styles: 
             }
         }
     } else {
-        lines.push(Line::from(Span::styled(
-            "  FILE NOT FOUND",
-            styles.dim(),
-        )));
+        lines.push(Line::from(Span::styled("  FILE NOT FOUND", styles.dim())));
     }
 
     let paragraph = Paragraph::new(lines).style(styles.base());

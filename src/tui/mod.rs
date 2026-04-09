@@ -14,8 +14,8 @@ use camino::Utf8PathBuf;
 pub async fn run() -> Result<()> {
     let cwd = std::env::current_dir().context("getting cwd")?;
     let harness_dir = cwd.join(".agent-harness");
-    let harness_root = Utf8PathBuf::from_path_buf(harness_dir)
-        .map_err(|_| anyhow::anyhow!("non-UTF8 path"))?;
+    let harness_root =
+        Utf8PathBuf::from_path_buf(harness_dir).map_err(|_| anyhow::anyhow!("non-UTF8 path"))?;
 
     app::run_app(harness_root)
 }

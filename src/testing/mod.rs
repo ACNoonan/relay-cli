@@ -57,8 +57,7 @@ pub async fn run_tests(
 
     // Save result.
     let result_dir = storage.artifacts_dir().join(test_result.id.to_string());
-    std::fs::create_dir_all(result_dir.as_std_path())
-        .context("creating test result dir")?;
+    std::fs::create_dir_all(result_dir.as_std_path()).context("creating test result dir")?;
     let result_path = result_dir.join("test-result.json");
     let json = serde_json::to_string_pretty(&test_result).context("serializing test result")?;
     std::fs::write(result_path.as_std_path(), json).context("writing test result")?;
@@ -70,14 +69,20 @@ pub async fn run_tests(
 pub fn format_test_markdown(result: &TestResult) -> String {
     let mut md = String::new();
     md.push_str("# Test Report\n\n");
-    md.push_str(&format!("**Date:** {}\n", result.created_at.format("%Y-%m-%d %H:%M:%S UTC")));
+    md.push_str(&format!(
+        "**Date:** {}\n",
+        result.created_at.format("%Y-%m-%d %H:%M:%S UTC")
+    ));
     md.push_str(&format!("**Verdict:** {:?}\n\n", result.verdict));
 
     md.push_str("## Commands\n\n");
     for r in &result.commands_run {
         let status = if r.exit_code == 0 { "PASS" } else { "FAIL" };
         md.push_str(&format!("### `{}` — {}\n\n", r.command, status));
-        md.push_str(&format!("Exit code: {} | Duration: {:.1}s\n\n", r.exit_code, r.duration_secs));
+        md.push_str(&format!(
+            "Exit code: {} | Duration: {:.1}s\n\n",
+            r.exit_code, r.duration_secs
+        ));
         if !r.stdout.is_empty() {
             md.push_str("<details><summary>stdout</summary>\n\n```\n");
             md.push_str(&r.stdout);

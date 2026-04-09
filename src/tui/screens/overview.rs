@@ -13,8 +13,8 @@ pub fn render(f: &mut Frame, area: Rect, state: &AppState, styles: &Styles) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(9),  // system status
-            Constraint::Length(7),  // session summary
+            Constraint::Length(9), // system status
+            Constraint::Length(7), // session summary
             Constraint::Min(6),    // recent activity
         ])
         .split(area);
@@ -57,10 +57,7 @@ fn render_system_status(f: &mut Frame, area: Rect, state: &AppState, styles: &St
             Span::styled("  HARNESS       ", styles.label()),
             harness,
         ]),
-        Line::from(vec![
-            Span::styled("  GIT           ", styles.label()),
-            git,
-        ]),
+        Line::from(vec![Span::styled("  GIT           ", styles.label()), git]),
         Line::from(Span::styled(
             "  ────────────────────────────────────────────",
             styles.dim(),
@@ -169,10 +166,7 @@ fn render_recent_sessions(f: &mut Frame, area: Rect, state: &AppState, styles: &
         lines.push(Line::from(vec![
             Span::styled(format!("  {:<10}", s.short_id), styles.base()),
             Span::styled(format!("{:<12}", s.provider), styles.base()),
-            Span::styled(
-                format!("{:<8}", s.status),
-                styles.status_style(&s.status),
-            ),
+            Span::styled(format!("{:<8}", s.status), styles.status_style(&s.status)),
         ]));
     }
 
@@ -194,7 +188,13 @@ fn render_recent_artifacts_and_reviews(
     // Recent artifacts
     let overview = &state.data.overview;
     if overview.recent_artifacts.is_empty() {
-        render_empty(f, chunks[0], "RECENT ARTIFACTS", "NO ARTIFACTS AVAILABLE", styles);
+        render_empty(
+            f,
+            chunks[0],
+            "RECENT ARTIFACTS",
+            "NO ARTIFACTS AVAILABLE",
+            styles,
+        );
     } else {
         let block = retro_block("RECENT ARTIFACTS", false, styles);
         let inner = block.inner(chunks[0]);
@@ -217,7 +217,13 @@ fn render_recent_artifacts_and_reviews(
 
     // Recent reviews
     if overview.recent_reviews.is_empty() {
-        render_empty(f, chunks[1], "RECENT REVIEWS", "NO REVIEWS AVAILABLE", styles);
+        render_empty(
+            f,
+            chunks[1],
+            "RECENT REVIEWS",
+            "NO REVIEWS AVAILABLE",
+            styles,
+        );
     } else {
         let block = retro_block("RECENT REVIEWS", false, styles);
         let inner = block.inner(chunks[1]);
@@ -233,10 +239,7 @@ fn render_recent_artifacts_and_reviews(
                         format!("{:<12}", r.verdict),
                         styles.status_style(&r.verdict),
                     ),
-                    Span::styled(
-                        r.goal.chars().take(20).collect::<String>(),
-                        styles.dim(),
-                    ),
+                    Span::styled(r.goal.chars().take(20).collect::<String>(), styles.dim()),
                 ])
             })
             .collect();

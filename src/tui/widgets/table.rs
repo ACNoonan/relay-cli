@@ -36,9 +36,14 @@ pub fn render_table(
                 .iter()
                 .map(|c| {
                     // Color status cells
-                    let style = if c == "Running" || c == "Completed" || c == "Crashed"
-                        || c == "Stopped" || c == "Pass" || c == "Fail"
-                        || c == "NeedsWork" || c == "Inconclusive"
+                    let style = if c == "Running"
+                        || c == "Completed"
+                        || c == "Crashed"
+                        || c == "Stopped"
+                        || c == "Pass"
+                        || c == "Fail"
+                        || c == "NeedsWork"
+                        || c == "Inconclusive"
                     {
                         styles.status_style(c)
                     } else if i == selected && active {

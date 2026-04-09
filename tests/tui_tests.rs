@@ -29,7 +29,9 @@ fn tui_subcommand_help() {
         .args(["tui", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Launch the interactive TUI dashboard"));
+        .stdout(predicate::str::contains(
+            "Launch the interactive TUI dashboard",
+        ));
 }
 
 /// Verify existing CLI commands still work after adding TUI.

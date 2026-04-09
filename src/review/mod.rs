@@ -133,14 +133,22 @@ pub fn format_review_markdown(review: &ReviewResult) -> String {
     if let Some(ref m) = review.model {
         md.push_str(&format!("**Model:** {}\n", m));
     }
-    md.push_str(&format!("**Date:** {}\n", review.created_at.format("%Y-%m-%d %H:%M:%S UTC")));
+    md.push_str(&format!(
+        "**Date:** {}\n",
+        review.created_at.format("%Y-%m-%d %H:%M:%S UTC")
+    ));
     md.push_str(&format!("**Verdict:** {:?}\n\n", review.verdict));
     md.push_str(&format!("## Summary\n\n{}\n\n", review.summary));
 
     if !review.findings.is_empty() {
         md.push_str("## Findings\n\n");
         for (i, f) in review.findings.iter().enumerate() {
-            md.push_str(&format!("### {}. [{}] {}\n\n", i + 1, f.severity.to_uppercase(), f.category));
+            md.push_str(&format!(
+                "### {}. [{}] {}\n\n",
+                i + 1,
+                f.severity.to_uppercase(),
+                f.category
+            ));
             if let Some(ref file) = f.file {
                 md.push_str(&format!("**File:** {}", file));
                 if let Some(line) = f.line {

@@ -18,7 +18,9 @@ pub fn current_branch() -> Result<Option<String>> {
         .output()
         .context("running git rev-parse")?;
     if output.status.success() {
-        Ok(Some(String::from_utf8_lossy(&output.stdout).trim().to_string()))
+        Ok(Some(
+            String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        ))
     } else {
         Ok(None)
     }
@@ -31,7 +33,9 @@ pub fn current_sha() -> Result<Option<String>> {
         .output()
         .context("running git rev-parse HEAD")?;
     if output.status.success() {
-        Ok(Some(String::from_utf8_lossy(&output.stdout).trim().to_string()))
+        Ok(Some(
+            String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        ))
     } else {
         Ok(None)
     }

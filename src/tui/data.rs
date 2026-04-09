@@ -32,7 +32,11 @@ pub fn load_snapshot(harness_root: &Utf8PathBuf) -> DataSnapshot {
 }
 
 /// Load log lines for a specific session.
-pub fn load_logs(harness_root: &Utf8PathBuf, session_id: uuid::Uuid, source: LogSource) -> LogBuffer {
+pub fn load_logs(
+    harness_root: &Utf8PathBuf,
+    session_id: uuid::Uuid,
+    source: LogSource,
+) -> LogBuffer {
     let storage = Storage::new(harness_root.clone());
     let path = match source {
         LogSource::Stdout => storage.session_stdout_path(session_id),
@@ -112,11 +116,8 @@ fn build_overview(storage: &Storage, initialized: bool) -> OverviewSnapshot {
             .count(),
     };
 
-    let recent_sessions: Vec<SessionRow> = sessions
-        .iter()
-        .take(5)
-        .map(|s| session_to_row(s))
-        .collect();
+    let recent_sessions: Vec<SessionRow> =
+        sessions.iter().take(5).map(|s| session_to_row(s)).collect();
 
     let all_artifacts = artifacts::list_artifacts(storage).unwrap_or_default();
     let recent_artifacts: Vec<ArtifactRow> = all_artifacts

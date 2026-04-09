@@ -10,13 +10,7 @@ use crate::tui::widgets::table::{render_detail_panel, render_table};
 
 pub fn render(f: &mut Frame, area: Rect, state: &AppState, styles: &Styles) {
     if state.data.sessions.is_empty() {
-        render_empty(
-            f,
-            area,
-            "SESSIONS",
-            "NO SESSIONS RECORDED",
-            styles,
-        );
+        render_empty(f, area, "SESSIONS", "NO SESSIONS RECORDED", styles);
         return;
     }
 
@@ -81,10 +75,7 @@ fn render_session_detail(f: &mut Frame, area: Rect, state: &AppState, styles: &S
         ("PROVIDER", detail.provider.clone()),
         ("ROLE", detail.role.clone()),
         ("STATUS", detail.status.clone()),
-        (
-            "MODEL",
-            detail.model.as_deref().unwrap_or("-").to_string(),
-        ),
+        ("MODEL", detail.model.as_deref().unwrap_or("-").to_string()),
         ("CWD", detail.cwd.clone()),
         (
             "STARTED",

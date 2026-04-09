@@ -81,9 +81,7 @@ impl Styles {
     }
 
     pub fn status_bar(&self) -> Style {
-        Style::default()
-            .fg(self.theme.fg)
-            .bg(Color::Rgb(25, 18, 6))
+        Style::default().fg(self.theme.fg).bg(Color::Rgb(25, 18, 6))
     }
 
     pub fn border(&self) -> Style {

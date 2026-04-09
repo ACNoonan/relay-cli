@@ -13,7 +13,11 @@ pub fn render_header(f: &mut Frame, area: Rect, state: &AppState, styles: &Style
     let now = chrono::Local::now().format("%H:%M:%S").to_string();
 
     let branch_info = if let Some(ref branch) = state.data.overview.git_branch {
-        let dirty = if state.data.overview.git_dirty { "*" } else { "" };
+        let dirty = if state.data.overview.git_dirty {
+            "*"
+        } else {
+            ""
+        };
         format!(" {}{}", branch, dirty)
     } else {
         String::new()
@@ -53,15 +57,9 @@ pub fn render_header(f: &mut Frame, area: Rect, state: &AppState, styles: &Style
     let right_pad = pad - left_pad;
 
     let mut spans = left;
-    spans.push(Span::styled(
-        " ".repeat(left_pad),
-        styles.header(),
-    ));
+    spans.push(Span::styled(" ".repeat(left_pad), styles.header()));
     spans.push(Span::styled(center_text, styles.accent()));
-    spans.push(Span::styled(
-        " ".repeat(right_pad),
-        styles.header(),
-    ));
+    spans.push(Span::styled(" ".repeat(right_pad), styles.header()));
     spans.push(Span::styled(right_text, styles.dim()));
 
     let header = Paragraph::new(Line::from(spans)).style(styles.header());
@@ -112,10 +110,7 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState, styles: &S
         })
         .unwrap_or_default();
 
-    let status = state
-        .status_message
-        .as_deref()
-        .unwrap_or("");
+    let status = state.status_message.as_deref().unwrap_or("");
 
     let line = Line::from(vec![
         Span::styled(format!(" {} ", screen_label), styles.accent_bold()),
@@ -123,10 +118,7 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState, styles: &S
         Span::styled(keys, styles.dim()),
         Span::styled("  ", styles.status_bar()),
         Span::styled(status, styles.warning()),
-        Span::styled(
-            format!("{}  ", refresh_text),
-            styles.dim(),
-        ),
+        Span::styled(format!("{}  ", refresh_text), styles.dim()),
     ]);
 
     let bar = Paragraph::new(line).style(styles.status_bar());
@@ -183,10 +175,7 @@ pub fn render_help(f: &mut Frame, area: Rect, styles: &Styles) {
             Span::styled("Toggle stdout/stderr (logs)", styles.base()),
         ]),
         Line::from(""),
-        Line::from(Span::styled(
-            "  Press ? or Esc to close",
-            styles.dim(),
-        )),
+        Line::from(Span::styled("  Press ? or Esc to close", styles.dim())),
     ];
 
     // Center the help box

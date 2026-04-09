@@ -11,13 +11,7 @@ use crate::tui::widgets::table::render_table;
 
 pub fn render(f: &mut Frame, area: Rect, state: &AppState, styles: &Styles) {
     if state.data.sessions.is_empty() {
-        render_empty(
-            f,
-            area,
-            "LOGS",
-            "NO SESSIONS AVAILABLE",
-            styles,
-        );
+        render_empty(f, area, "LOGS", "NO SESSIONS AVAILABLE", styles);
         return;
     }
 
@@ -42,13 +36,7 @@ fn render_session_picker(f: &mut Frame, area: Rect, state: &AppState, styles: &S
         .data
         .sessions
         .iter()
-        .map(|s| {
-            vec![
-                s.short_id.clone(),
-                s.provider.clone(),
-                s.status.clone(),
-            ]
-        })
+        .map(|s| vec![s.short_id.clone(), s.provider.clone(), s.status.clone()])
         .collect();
 
     render_table(

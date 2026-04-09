@@ -21,8 +21,8 @@ use crate::testing;
 fn resolve_storage() -> Result<(HarnessConfig, Storage)> {
     let cwd = std::env::current_dir().context("getting cwd")?;
     let harness_dir = cwd.join(".agent-harness");
-    let harness_path = Utf8PathBuf::from_path_buf(harness_dir)
-        .map_err(|_| anyhow::anyhow!("non-UTF8 path"))?;
+    let harness_path =
+        Utf8PathBuf::from_path_buf(harness_dir).map_err(|_| anyhow::anyhow!("non-UTF8 path"))?;
     let storage = Storage::new(harness_path.clone());
 
     if !storage.is_initialized() {
@@ -54,22 +54,21 @@ fn print_header(msg: &str) {
 pub async fn cmd_init() -> Result<()> {
     let cwd = std::env::current_dir().context("getting cwd")?;
     let harness_dir = cwd.join(".agent-harness");
-    let harness_path = Utf8PathBuf::from_path_buf(harness_dir)
-        .map_err(|_| anyhow::anyhow!("non-UTF8 path"))?;
+    let harness_path =
+        Utf8PathBuf::from_path_buf(harness_dir).map_err(|_| anyhow::anyhow!("non-UTF8 path"))?;
 
     if harness_path.as_std_path().is_dir() {
         let storage = Storage::new(harness_path.clone());
         if storage.is_initialized() {
-            println!(
-                "{}",
-                style("Harness already initialized.").yellow()
-            );
+            println!("{}", style("Harness already initialized.").yellow());
             return Ok(());
         }
     }
 
     let storage = Storage::new(harness_path.clone());
-    storage.initialize().context("creating storage directories")?;
+    storage
+        .initialize()
+        .context("creating storage directories")?;
 
     let config = HarnessConfig::default_config()?;
     config
@@ -119,8 +118,8 @@ pub async fn cmd_doctor() -> Result<()> {
     print_header("Storage");
     let cwd = std::env::current_dir().context("getting cwd")?;
     let harness_dir = cwd.join(".agent-harness");
-    let harness_path = Utf8PathBuf::from_path_buf(harness_dir)
-        .map_err(|_| anyhow::anyhow!("non-UTF8 path"))?;
+    let harness_path =
+        Utf8PathBuf::from_path_buf(harness_dir).map_err(|_| anyhow::anyhow!("non-UTF8 path"))?;
     let storage = Storage::new(harness_path.clone());
     if storage.is_initialized() {
         print_ok(&format!("Harness initialized at {}", harness_path));
@@ -381,7 +380,9 @@ pub async fn cmd_review_codex(
     };
 
     // Get codex provider.
-    let binary_override = config.provider_config("codex").and_then(|c| c.binary.as_deref());
+    let binary_override = config
+        .provider_config("codex")
+        .and_then(|c| c.binary.as_deref());
     let p = provider::get_provider("codex", binary_override).context("codex provider not found")?;
 
     let install_check = p.validate_installation();
@@ -435,7 +436,13 @@ pub async fn cmd_review_codex(
                 "medium" => style(&f.severity).yellow().to_string(),
                 _ => style(&f.severity).dim().to_string(),
             };
-            println!("  {}. [{}] {} — {}", i + 1, severity_styled, f.category, f.message);
+            println!(
+                "  {}. [{}] {} — {}",
+                i + 1,
+                severity_styled,
+                f.category,
+                f.message
+            );
         }
     }
 
@@ -461,10 +468,7 @@ pub async fn cmd_review_history() -> Result<()> {
         return Ok(());
     }
 
-    println!(
-        "{:<10} {:<12} {:<12} {}",
-        "ID", "PROVIDER", "DATE", "GOAL"
-    );
+    println!("{:<10} {:<12} {:<12} {}", "ID", "PROVIDER", "DATE", "GOAL");
     println!("{}", "-".repeat(60));
     for h in &reviews {
         println!(
@@ -515,10 +519,7 @@ pub async fn cmd_test_run(commands: Vec<String>) -> Result<()> {
         } else {
             style("FAIL").red().bold()
         };
-        println!(
-            "  {} `{}` ({:.1}s)",
-            status, r.command, r.duration_secs
-        );
+        println!("  {} `{}` ({:.1}s)", status, r.command, r.duration_secs);
     }
 
     println!(
@@ -586,10 +587,7 @@ pub async fn cmd_commit_prepare() -> Result<()> {
 
 pub async fn cmd_ci_watch() -> Result<()> {
     let (_config, storage) = resolve_storage()?;
-    println!(
-        "{} Checking CI status...",
-        style("◎").cyan().bold()
-    );
+    println!("{} Checking CI status...", style("◎").cyan().bold());
 
     let snapshot = ci::check_ci_status(&storage).await?;
 
@@ -635,10 +633,7 @@ pub async fn cmd_e2e(commands: Vec<String>) -> Result<()> {
         } else {
             style("FAIL").red().bold()
         };
-        println!(
-            "  {} `{}` ({:.1}s)",
-            status, r.command, r.duration_secs
-        );
+        println!("  {} `{}` ({:.1}s)", status, r.command, r.duration_secs);
     }
 
     println!("\nVerdict: {:?}", result.verdict);
@@ -656,10 +651,7 @@ pub async fn cmd_artifacts_list() -> Result<()> {
         return Ok(());
     }
 
-    println!(
-        "{:<10} {:<18} {:<22} {}",
-        "ID", "TYPE", "CREATED", "PATH"
-    );
+    println!("{:<10} {:<18} {:<22} {}", "ID", "TYPE", "CREATED", "PATH");
     println!("{}", "-".repeat(80));
     for a in &all {
         println!(
@@ -685,7 +677,10 @@ pub async fn cmd_artifacts_show(id: &str) -> Result<()> {
         &manifest.id.to_string()[..8],
         manifest.artifact_type
     );
-    println!("Created: {}", manifest.created_at.format("%Y-%m-%d %H:%M:%S UTC"));
+    println!(
+        "Created: {}",
+        manifest.created_at.format("%Y-%m-%d %H:%M:%S UTC")
+    );
     println!("Path: {}", manifest.path);
     if let Some(ref ctx) = manifest.git_context {
         println!(

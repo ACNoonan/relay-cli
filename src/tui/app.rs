@@ -54,8 +54,7 @@ pub fn run_app(harness_root: Utf8PathBuf) -> Result<()> {
 
     // Load initial logs if sessions exist
     if let Some(session) = state.log_session() {
-        state.data.log_buffer =
-            data::load_logs(&harness_root, session.id, state.log_source);
+        state.data.log_buffer = data::load_logs(&harness_root, session.id, state.log_source);
     }
 
     let mut last_data_refresh = Instant::now();
@@ -81,21 +80,11 @@ pub fn run_app(harness_root: Utf8PathBuf) -> Result<()> {
             chrome::render_nav(f, main_layout[1], &state, &styles);
 
             match state.screen {
-                Screen::Overview => {
-                    screens::overview::render(f, main_layout[2], &state, &styles)
-                }
-                Screen::Sessions => {
-                    screens::sessions::render(f, main_layout[2], &state, &styles)
-                }
-                Screen::Logs => {
-                    screens::logs::render(f, main_layout[2], &state, &styles)
-                }
-                Screen::Artifacts => {
-                    screens::artifacts::render(f, main_layout[2], &state, &styles)
-                }
-                Screen::Reviews => {
-                    screens::reviews::render(f, main_layout[2], &state, &styles)
-                }
+                Screen::Overview => screens::overview::render(f, main_layout[2], &state, &styles),
+                Screen::Sessions => screens::sessions::render(f, main_layout[2], &state, &styles),
+                Screen::Logs => screens::logs::render(f, main_layout[2], &state, &styles),
+                Screen::Artifacts => screens::artifacts::render(f, main_layout[2], &state, &styles),
+                Screen::Reviews => screens::reviews::render(f, main_layout[2], &state, &styles),
             }
 
             chrome::render_status_bar(f, main_layout[3], &state, &styles);
@@ -111,8 +100,8 @@ pub fn run_app(harness_root: Utf8PathBuf) -> Result<()> {
 
         // Data refresh
         let now = Instant::now();
-        let should_refresh_data = needs_refresh
-            || now.duration_since(last_data_refresh) >= DATA_REFRESH_INTERVAL;
+        let should_refresh_data =
+            needs_refresh || now.duration_since(last_data_refresh) >= DATA_REFRESH_INTERVAL;
         let should_refresh_logs = state.screen == Screen::Logs
             && now.duration_since(last_log_refresh) >= LOG_REFRESH_INTERVAL;
 
@@ -130,8 +119,7 @@ pub fn run_app(harness_root: Utf8PathBuf) -> Result<()> {
         if should_refresh_logs || (needs_refresh && state.screen == Screen::Logs) {
             if let Some(session) = state.log_session() {
                 let sid = session.id;
-                state.data.log_buffer =
-                    data::load_logs(&harness_root, sid, state.log_source);
+                state.data.log_buffer = data::load_logs(&harness_root, sid, state.log_source);
             }
             last_log_refresh = now;
         }

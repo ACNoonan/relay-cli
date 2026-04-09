@@ -55,7 +55,11 @@ impl Provider for ShellProvider {
     }
 
     fn build_prompt_command(&self, prompt: &str, _model: Option<&str>) -> Result<Vec<String>> {
-        Ok(vec![self.binary.clone(), "-c".to_string(), prompt.to_string()])
+        Ok(vec![
+            self.binary.clone(),
+            "-c".to_string(),
+            prompt.to_string(),
+        ])
     }
 
     fn safe_for_unattended(&self) -> bool {
