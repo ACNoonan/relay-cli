@@ -44,6 +44,22 @@ impl Storage {
         self.root.join("cache")
     }
 
+    pub fn conversations_dir(&self) -> Utf8PathBuf {
+        self.root.join("conversations")
+    }
+
+    pub fn conversation_dir(&self, id: Uuid) -> Utf8PathBuf {
+        self.conversations_dir().join(id.to_string())
+    }
+
+    pub fn conversation_json_path(&self, id: Uuid) -> Utf8PathBuf {
+        self.conversation_dir(id).join("conversation.json")
+    }
+
+    pub fn conversation_markdown_path(&self, id: Uuid) -> Utf8PathBuf {
+        self.conversation_dir(id).join("transcript.md")
+    }
+
     // Per-session paths
 
     pub fn session_dir(&self, id: Uuid) -> Utf8PathBuf {
@@ -105,6 +121,7 @@ impl Storage {
             self.artifacts_dir(),
             self.logs_dir(),
             self.cache_dir(),
+            self.conversations_dir(),
         ];
         for dir in &dirs {
             std::fs::create_dir_all(dir.as_std_path())
@@ -126,6 +143,24 @@ impl Storage {
         }
         let mut ids = Vec::new();
         for entry in std::fs::read_dir(dir.as_std_path()).context("reading sessions dir")? {
+            let entry = entry?;
+            if let Some(name) = entry.file_name().to_str() {
+                if let Ok(id) = Uuid::parse_str(name) {
+                    ids.push(id);
+                }
+            }
+        }
+        ids.sort();
+        Ok(ids)
+    }
+
+    pub fn list_conversations(&self) -> Result<Vec<Uuid>> {
+        let dir = self.conversations_dir();
+        if !dir.as_std_path().is_dir() {
+            return Ok(vec![]);
+        }
+        let mut ids = Vec::new();
+        for entry in std::fs::read_dir(dir.as_std_path()).context("reading conversations dir")? {
             let entry = entry?;
             if let Some(name) = entry.file_name().to_str() {
                 if let Ok(id) = Uuid::parse_str(name) {

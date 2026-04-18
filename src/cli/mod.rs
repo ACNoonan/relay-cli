@@ -116,7 +116,7 @@ pub enum Commands {
     /// Launch the interactive TUI dashboard
     Tui,
 
-    /// Run the live Claude -> GPT verification bridge
+    /// Run the live Claude -> GPT verification bridge (deprecated alias of `chat`)
     Bridge {
         /// Prompt sent to Claude
         #[arg(long)]
@@ -134,6 +134,37 @@ pub enum Commands {
         #[arg(long)]
         reviewer_prompt_file: Option<String>,
         /// Resume an existing Claude session ID
+        #[arg(long)]
+        resume: Option<String>,
+    },
+
+    /// Launch the multi-agent chat TUI (Claude / GPT-5.4 / Codex)
+    Chat {
+        /// Optional initial prompt sent to the starting agent
+        #[arg(long)]
+        prompt: Option<String>,
+        /// Which agent to start with
+        #[arg(long, value_parser = ["claude", "gpt", "codex"], default_value = "claude")]
+        start_with: String,
+        /// Claude model override
+        #[arg(long)]
+        claude_model: Option<String>,
+        /// Claude binary name/path
+        #[arg(long, default_value = "claude")]
+        claude_binary: String,
+        /// Codex binary name/path
+        #[arg(long, default_value = "codex")]
+        codex_binary: String,
+        /// GPT model
+        #[arg(long, default_value = "gpt-5.4")]
+        gpt_model: String,
+        /// Optional system prompt file for GPT
+        #[arg(long)]
+        system_prompt_file: Option<String>,
+        /// Disable auto-handoff on Shift+Left / Shift+Right rotation
+        #[arg(long)]
+        no_auto_handoff: bool,
+        /// Resume a prior conversation by UUID (under `.agent-harness/conversations/`)
         #[arg(long)]
         resume: Option<String>,
     },

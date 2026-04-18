@@ -104,6 +104,9 @@ async fn main() -> anyhow::Result<()> {
             reviewer_prompt_file,
             resume,
         } => {
+            eprintln!(
+                "warning: `relay bridge` is deprecated; use `relay chat` for the multi-agent TUI."
+            );
             bridge::run(bridge::BridgeOptions {
                 prompt,
                 claude_model,
@@ -111,6 +114,40 @@ async fn main() -> anyhow::Result<()> {
                 gpt_model,
                 reviewer_prompt_file,
                 resume_session_id: resume,
+            })
+            .await
+        }
+
+        Commands::Chat {
+            prompt,
+            start_with,
+            claude_model,
+            claude_binary,
+            codex_binary,
+            gpt_model,
+            system_prompt_file,
+            no_auto_handoff,
+            resume,
+        } => {
+            let resume_conversation_id = match resume {
+                Some(s) => Some(
+                    uuid::Uuid::parse_str(&s)
+                        .map_err(|e| anyhow::anyhow!("invalid --resume uuid {s}: {e}"))?,
+                ),
+                None => None,
+            };
+            let harness_root = camino::Utf8PathBuf::from(".agent-harness");
+            bridge::run_chat(bridge::ChatOptions {
+                prompt,
+                start_with: bridge::parse_start_with(&start_with),
+                claude_model,
+                claude_binary,
+                codex_binary,
+                gpt_model,
+                system_prompt_file,
+                auto_handoff: !no_auto_handoff,
+                resume_conversation_id,
+                harness_root,
             })
             .await
         }

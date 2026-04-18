@@ -37,8 +37,8 @@ relay capture last-response --file response.md
 # Send to Codex for review
 relay review codex
 
-# Experimental: stream Claude -> GPT verification in split-pane TUI
-relay bridge --prompt "Review and improve src/provider/claude.rs"
+# Multi-agent chat TUI (Claude / GPT-5.4 / Codex)
+relay chat --prompt "Review and improve src/provider/claude.rs"
 
 # Run tests
 relay test run --command "cargo test"
@@ -98,23 +98,46 @@ Relay is **artifact-first**: every handoff between agents produces a saved manif
 | `relay config show` | Print current configuration |
 | `relay config edit` | Open config in `$EDITOR` |
 | `relay logs` | View session logs |
-| `relay bridge --prompt "..."` | Experimental live Claude -> GPT verification bridge |
+| `relay chat [--prompt ...]` | Launch the multi-agent chat TUI (Claude / GPT-5.4 / Codex) |
+| `relay bridge ...` | Deprecated alias — forwards to `relay chat` |
 
-### Bridge Keybindings
+### Chat TUI
 
-When running `relay bridge`:
+A single-pane TUI that holds one conversation across three agents. The active agent
+is shown in the top chrome; rotate between them with a hotkey and the previous
+agent's last response is automatically handed off as the next agent's prompt.
 
-- `Enter` send input prompt to current target
-- `Ctrl+T` toggle prompt target (`Claude` / `GPT`)
-- `Tab` switch active output pane
-- `Ctrl+R` route active pane output to the other model
-- `Ctrl+E` rerun the previous operation
-- `Ctrl+N` clear Claude session and start a new context
-- `Up`/`Down`/`PgUp`/`PgDn`/`Home`/`End` scroll active pane output
-- `Ctrl+F` enter search mode for the active pane (`Enter` to apply)
-- `n` / `N` jump to next / previous search match
-- `Esc` clear the prompt input
-- `q` or `Ctrl+C` quit
+- **Same conversation throughout.** Claude's `--resume` session id and Codex's
+  `exec resume` thread id are kept per-agent, so swapping away and back continues
+  the same thread with full context. GPT has no server-side session, so its
+  history is replayed locally each turn.
+- **Persistence.** Every turn is saved to `.agent-harness/conversations/<uuid>/`
+  as both `conversation.json` and a human-readable `transcript.md`. Resume with
+  `relay chat --resume <uuid>`.
+- **`--bare` Claude.** The backend invokes `claude -p --bare
+  --output-format stream-json --verbose --include-partial-messages`, which drops
+  the ~50K-token auto-discovery overhead to ~5K per turn.
+
+#### Keybindings
+
+- `Enter` — send typed input to the active agent
+- `Shift+Right` — rotate to the next agent (`Claude → GPT → Codex → Claude`) and
+  auto-handoff the last assistant response as the new prompt
+- `Shift+Left` — rotate to the previous agent with auto-handoff
+- `Tab` — rotate to the next agent **without** handoff (focus-only)
+- `Ctrl+N` — clear the conversation and all per-agent session state
+- `Ctrl+H` — toggle auto-handoff-on-rotate
+- `PgUp` / `PgDn` / `Home` / `End` — scroll the conversation log
+- `Esc` — clear the input
+- `Ctrl+C` or `q` (with empty input) — quit
+
+#### Flags
+
+- `--start-with claude|gpt|codex` — agent to focus at startup (default: `claude`)
+- `--no-auto-handoff` — rotate without triggering a handoff
+- `--resume <uuid>` — rehydrate a prior conversation
+- `--system-prompt-file <path>` — custom system prompt for GPT
+- `--claude-model`, `--claude-binary`, `--codex-binary`, `--gpt-model`
 
 ## Providers
 
