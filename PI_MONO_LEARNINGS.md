@@ -17,11 +17,11 @@ The **multi-agent chat TUI** (`relay chat`, persisted to `.agent-harness/convers
 
 | # | Item | Pi source | Relay target | Status |
 |---|------|-----------|--------------|--------|
-| 1 | Slash commands in chat input | `coding-agent/src/core/slash-commands.ts` (38) | `src/bridge/tui_chat.rs:1` | todo (Wave B) |
-| 2 | JSON theme system | `coding-agent/src/modes/interactive/theme/{theme.ts, dark.json, light.json, theme-schema.json}` | `src/tui/theme/` (was `src/tui/theme.rs`) | **done — uncommitted** |
-| 3 | Markdown rendering w/ syntax highlight | `tui/src/components/markdown.ts` (852) | `src/bridge/tui_chat.rs` (output rendering) | todo (Wave B) |
-| 4 | Compaction with summarization | `coding-agent/src/core/compaction/{compaction.ts (823), branch-summarization.ts (355)}` | `src/bridge/compaction.rs`, `src/bridge/conversation.rs`, `src/bridge/worker.rs` | **done — uncommitted** |
-| 5 | Fuzzy session picker | `tui/src/fuzzy.ts` + `coding-agent/src/modes/interactive/components/session-selector.ts` (1010) | `src/bridge/session_picker.rs` | **done — uncommitted** |
+| 1 | Slash commands in chat input | `coding-agent/src/core/slash-commands.ts` (38) | `src/bridge/slash.rs` + `src/bridge/tui_chat.rs` | **done** — `d9aa61f` |
+| 2 | JSON theme system | `coding-agent/src/modes/interactive/theme/{theme.ts, dark.json, light.json, theme-schema.json}` | `src/tui/theme/` + `assets/themes/` | **done** — `d196342` |
+| 3 | Markdown rendering w/ syntax highlight | `tui/src/components/markdown.ts` (852) | `src/bridge/markdown.rs` + `src/bridge/tui_chat.rs` | **done** — `d558ee1` |
+| 4 | Compaction with summarization | `coding-agent/src/core/compaction/{compaction.ts (823), branch-summarization.ts (355)}` | `src/bridge/compaction.rs`, `src/bridge/conversation.rs`, `src/bridge/worker.rs` | **done** — `d196342` |
+| 5 | Fuzzy session picker | `tui/src/fuzzy.ts` + `coding-agent/src/modes/interactive/components/session-selector.ts` (1010) | `src/bridge/session_picker.rs` | **done** — `d196342` |
 
 ### 1. Slash commands
 Built-in registry: `/new`, `/resume`, `/compact`, `/copy`, `/export`, `/model`, `/hotkeys`, `/fork`, `/quit`, `/handoff <agent>`. Replaces "more hotkeys" as the growth path; gives discoverability via tab-completion.
