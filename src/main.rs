@@ -128,6 +128,7 @@ async fn main() -> anyhow::Result<()> {
             system_prompt_file,
             no_auto_handoff,
             resume,
+            new,
         } => {
             let resume_conversation_id = match resume {
                 Some(s) => Some(
@@ -147,6 +148,7 @@ async fn main() -> anyhow::Result<()> {
                 system_prompt_file,
                 auto_handoff: !no_auto_handoff,
                 resume_conversation_id,
+                skip_picker: new,
                 harness_root,
             })
             .await

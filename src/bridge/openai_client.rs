@@ -14,7 +14,54 @@ use std::sync::Mutex;
 use tokio::sync::mpsc;
 
 use super::agent::{AgentBackend, BackendEvent, BackendInput, BackendRunResult};
-use super::conversation::{Agent, Role, TurnStatus};
+use super::conversation::{Agent, Role, Turn, TurnStatus};
+
+/// Build the OpenAI Chat Completions message list from the system prompt, the
+/// replayed conversation history, and the new user turn.
+///
+/// Summary turns (`Turn::is_summary()`) — produced by [`super::compaction`] — are
+/// emitted as `system` messages so the model treats them as background context
+/// rather than as a peer reply. They appear immediately after the configured
+/// system prompt and never carry agent-attribution prefixes.
+pub(super) fn build_messages(system_prompt: &str, turns: &[Turn], next_prompt: &str) -> Vec<Value> {
+    let mut messages: Vec<Value> = Vec::with_capacity(turns.len() + 2);
+    messages.push(json!({"role": "system", "content": system_prompt}));
+    for turn in turns {
+        if turn.status == TurnStatus::Error {
+            continue;
+        }
+        if turn.is_summary() {
+            // Summary turns are folded in as additional system context. The summary text
+            // already self-describes ("## Goal", "## Done", …) so no extra prefix.
+            messages.push(json!({
+                "role": "system",
+                "content": format!(
+                    "[Conversation summary covering {} prior turns]\n\n{}",
+                    turn.summarized_turn_count.unwrap_or_default(),
+                    turn.content,
+                ),
+            }));
+            continue;
+        }
+        let role = match turn.role {
+            Role::User | Role::Handoff => "user",
+            Role::Assistant => "assistant",
+            Role::System => "system",
+        };
+        let prefix = match (turn.role, turn.agent) {
+            (Role::Assistant, Agent::Claude) => "[From Claude] ",
+            (Role::Assistant, Agent::Codex) => "[From Codex] ",
+            (Role::Handoff, _) => "[Handoff] ",
+            _ => "",
+        };
+        messages.push(json!({
+            "role": role,
+            "content": format!("{prefix}{}", turn.content),
+        }));
+    }
+    messages.push(json!({"role": "user", "content": next_prompt}));
+    messages
+}
 
 struct OpenAiClient {
     client: Client,
@@ -80,29 +127,11 @@ impl AgentBackend for OpenAiBackend {
             .clone()
             .unwrap_or_else(|| self.default_model.clone());
 
-        let mut messages: Vec<Value> = Vec::with_capacity(input.conversation.turns.len() + 2);
-        messages.push(json!({"role": "system", "content": &self.system_prompt}));
-        for turn in &input.conversation.turns {
-            if turn.status == TurnStatus::Error {
-                continue;
-            }
-            let role = match turn.role {
-                Role::User | Role::Handoff => "user",
-                Role::Assistant => "assistant",
-                Role::System => "system",
-            };
-            let prefix = match (turn.role, turn.agent) {
-                (Role::Assistant, Agent::Claude) => "[From Claude] ",
-                (Role::Assistant, Agent::Codex) => "[From Codex] ",
-                (Role::Handoff, _) => "[Handoff] ",
-                _ => "",
-            };
-            messages.push(json!({
-                "role": role,
-                "content": format!("{prefix}{}", turn.content),
-            }));
-        }
-        messages.push(json!({"role": "user", "content": input.prompt}));
+        let messages = build_messages(
+            &self.system_prompt,
+            &input.conversation.turns,
+            &input.prompt,
+        );
 
         let body = json!({
             "model": model,

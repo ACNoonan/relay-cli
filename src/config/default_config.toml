@@ -8,6 +8,26 @@ git_worktree_enabled = false
 retention_days = 30
 max_artifact_mb = 100
 
+[ui]
+# Built-in themes: "amber" (default), "dark", "light".
+# Custom themes live at ~/.config/relay/themes/<name>.json (or
+# $XDG_CONFIG_HOME/relay/themes). The RELAY_THEME env var overrides this.
+theme = "amber"
+
+# GPT replay-buffer compaction. Claude/Codex use vendor `--resume`/`exec resume`
+# and are NOT affected by these settings. Override per-field with the env vars
+# RELAY_COMPACTION_TRIGGER_TOKENS / RELAY_COMPACTION_KEEP_TOKENS / RELAY_COMPACTION_AUTO.
+[bridge.compaction]
+auto_enabled = true
+# Auto-compact when the estimated token count of the GPT replay buffer crosses
+# this. 32_000 ≈ 1/4 of GPT-5.4's 128k context window: leaves headroom for the
+# next reply and keeps summarization itself in one round-trip.
+trigger_tokens = 32000
+# Tokens of recent conversation always kept un-summarized at the tail.
+keep_recent_tokens = 8000
+# Hard floor on tail length, regardless of token math.
+min_keep_turns = 4
+
 [providers.claude]
 binary = "claude"
 allowed_modes = ["interactive"]

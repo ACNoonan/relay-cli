@@ -1,0 +1,104 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Relay TUI Theme",
+    "description": "Theme schema for the relay CLI TUIs (dashboard + chat). Modeled on pi-mono's theme schema.",
+    "type": "object",
+    "required": ["name", "colors"],
+    "properties": {
+        "$schema": { "type": "string" },
+        "name": { "type": "string", "description": "Theme name" },
+        "vars": {
+            "type": "object",
+            "description": "Reusable color variables. Token values can reference these by name.",
+            "additionalProperties": { "$ref": "#/$defs/colorValue" }
+        },
+        "colors": {
+            "type": "object",
+            "description": "Semantic theme tokens (all required).",
+            "required": [
+                "accent",
+                "accentBright",
+                "border",
+                "borderAccent",
+                "borderMuted",
+                "success",
+                "error",
+                "warning",
+                "muted",
+                "dim",
+                "text",
+                "bg",
+                "headerBg",
+                "headerFg",
+                "statusBarBg",
+                "selectedBg",
+                "selectedFg",
+                "navActiveBg",
+                "mdHeading",
+                "mdLink",
+                "mdLinkUrl",
+                "mdCode",
+                "mdCodeBlock",
+                "mdCodeBlockBorder",
+                "mdQuote",
+                "mdQuoteBorder",
+                "mdHr",
+                "mdListBullet",
+                "statusRunning",
+                "statusPass",
+                "statusFail"
+            ],
+            "properties": {
+                "accent":              { "$ref": "#/$defs/colorValue", "description": "Primary accent (logos, focus, cursor)" },
+                "accentBright":        { "$ref": "#/$defs/colorValue", "description": "Brighter accent for emphasis (selected text)" },
+                "border":              { "$ref": "#/$defs/colorValue", "description": "Inactive panel border" },
+                "borderAccent":        { "$ref": "#/$defs/colorValue", "description": "Active/focused panel border" },
+                "borderMuted":         { "$ref": "#/$defs/colorValue", "description": "Subtle border (separators)" },
+                "success":             { "$ref": "#/$defs/colorValue", "description": "Success states" },
+                "error":               { "$ref": "#/$defs/colorValue", "description": "Error states" },
+                "warning":             { "$ref": "#/$defs/colorValue", "description": "Warning states" },
+                "muted":               { "$ref": "#/$defs/colorValue", "description": "Secondary text (labels)" },
+                "dim":                 { "$ref": "#/$defs/colorValue", "description": "Tertiary/dimmed text" },
+                "text":                { "$ref": "#/$defs/colorValue", "description": "Default foreground (empty = terminal default)" },
+                "bg":                  { "$ref": "#/$defs/colorValue", "description": "Default background (empty = terminal default)" },
+                "headerBg":            { "$ref": "#/$defs/colorValue", "description": "Top header bar background" },
+                "headerFg":            { "$ref": "#/$defs/colorValue", "description": "Top header bar foreground" },
+                "statusBarBg":         { "$ref": "#/$defs/colorValue", "description": "Bottom status bar background" },
+                "selectedBg":          { "$ref": "#/$defs/colorValue", "description": "Selected row background" },
+                "selectedFg":          { "$ref": "#/$defs/colorValue", "description": "Selected row foreground" },
+                "navActiveBg":         { "$ref": "#/$defs/colorValue", "description": "Active nav-tab background" },
+                "mdHeading":           { "$ref": "#/$defs/colorValue", "description": "Markdown heading text" },
+                "mdLink":              { "$ref": "#/$defs/colorValue", "description": "Markdown link text" },
+                "mdLinkUrl":           { "$ref": "#/$defs/colorValue", "description": "Markdown link URL" },
+                "mdCode":              { "$ref": "#/$defs/colorValue", "description": "Markdown inline code" },
+                "mdCodeBlock":         { "$ref": "#/$defs/colorValue", "description": "Markdown code block content" },
+                "mdCodeBlockBorder":   { "$ref": "#/$defs/colorValue", "description": "Markdown code block fence" },
+                "mdQuote":             { "$ref": "#/$defs/colorValue", "description": "Markdown blockquote text" },
+                "mdQuoteBorder":       { "$ref": "#/$defs/colorValue", "description": "Markdown blockquote border" },
+                "mdHr":                { "$ref": "#/$defs/colorValue", "description": "Markdown horizontal rule" },
+                "mdListBullet":        { "$ref": "#/$defs/colorValue", "description": "Markdown list bullets" },
+                "statusRunning":       { "$ref": "#/$defs/colorValue", "description": "Session status: running" },
+                "statusPass":          { "$ref": "#/$defs/colorValue", "description": "Session status: completed/pass" },
+                "statusFail":          { "$ref": "#/$defs/colorValue", "description": "Session status: crashed/fail" }
+            },
+            "additionalProperties": false
+        }
+    },
+    "additionalProperties": false,
+    "$defs": {
+        "colorValue": {
+            "oneOf": [
+                {
+                    "type": "string",
+                    "description": "Hex color (#RRGGBB), variable reference, or empty string for terminal default"
+                },
+                {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 255,
+                    "description": "256-color palette index (0-255)"
+                }
+            ]
+        }
+    }
+}

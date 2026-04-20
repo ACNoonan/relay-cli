@@ -59,9 +59,7 @@ impl ChatLog {
         let path = logs_dir.join(format!("relay-chat-{ts}-{session_uuid}.log"));
 
         let log = Self {
-            inner: Arc::new(Mutex::new(Some(ChatLogInner {
-                path: path.clone(),
-            }))),
+            inner: Arc::new(Mutex::new(Some(ChatLogInner { path: path.clone() }))),
         };
         log.write_line(
             "session",
@@ -75,7 +73,10 @@ impl ChatLog {
     }
 
     pub fn path(&self) -> Option<Utf8PathBuf> {
-        self.inner.lock().ok().and_then(|g| g.as_ref().map(|i| i.path.clone()))
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|i| i.path.clone()))
     }
 
     /// Write a single structured record. Format: `{"ts":..,"kind":..,"payload":{...}}\n`.

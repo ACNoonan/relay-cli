@@ -55,7 +55,9 @@ impl AgentBackend for CodexBackend {
         events: mpsc::Sender<BackendEvent>,
     ) -> Result<BackendRunResult> {
         events
-            .send(BackendEvent::Started { agent: Agent::Codex })
+            .send(BackendEvent::Started {
+                agent: Agent::Codex,
+            })
             .await
             .ok();
 
@@ -160,8 +162,8 @@ impl AgentBackend for CodexBackend {
                         Some(v) => v,
                         None => continue,
                     };
-                    let is_agent_msg = item.get("type").and_then(Value::as_str)
-                        == Some("agent_message");
+                    let is_agent_msg =
+                        item.get("type").and_then(Value::as_str) == Some("agent_message");
                     if !is_agent_msg {
                         continue;
                     }

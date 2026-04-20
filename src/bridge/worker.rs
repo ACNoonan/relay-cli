@@ -19,6 +19,7 @@ use super::agent::{AgentBackend, BackendEvent, BackendInput};
 use super::chat_log::ChatLog;
 use super::claude_backend::ClaudeBackend;
 use super::codex_backend::CodexBackend;
+use super::compaction::{self, CompactionConfig, CompactionResult, OpenAiSummarizer, Summarizer};
 use super::conversation::{Agent, Conversation, Role, TurnStatus};
 use super::openai_client::OpenAiBackend;
 use super::persist::ConversationStore;
@@ -28,10 +29,18 @@ use super::persist::ConversationStore;
 pub enum WorkerStatus {
     #[default]
     Idle,
-    Submitting { agent: Agent },
-    Streaming { agent: Agent },
-    QueuedHandoff { to: Agent },
-    Error { message: String },
+    Submitting {
+        agent: Agent,
+    },
+    Streaming {
+        agent: Agent,
+    },
+    QueuedHandoff {
+        to: Agent,
+    },
+    Error {
+        message: String,
+    },
 }
 
 /// Commands the UI sends to the worker.
@@ -79,6 +88,9 @@ pub struct WorkerConfig {
     pub harness_root: Option<camino::Utf8PathBuf>,
     /// When Some, rehydrate this conversation instead of starting fresh.
     pub resume_conversation: Option<Conversation>,
+    /// Tunables for the GPT replay-buffer compaction pass. See
+    /// [`super::compaction::CompactionConfig`].
+    pub compaction: CompactionConfig,
 }
 
 impl Default for WorkerConfig {
@@ -94,6 +106,7 @@ impl Default for WorkerConfig {
             handoff_template: DEFAULT_HANDOFF_TEMPLATE.into(),
             harness_root: None,
             resume_conversation: None,
+            compaction: CompactionConfig::default(),
         }
     }
 }
@@ -133,12 +146,8 @@ impl Worker {
             .clone()
             .unwrap_or_else(|| Conversation::new(cfg.initial_agent, cfg.auto_handoff_enabled));
         let log = ChatLog::open(cfg.harness_root.as_deref(), conversation.id);
-        let claude = Arc::new(
-            ClaudeBackend::new(cfg.claude_binary.clone()).with_log(log.clone()),
-        );
-        let codex = Arc::new(
-            CodexBackend::new(cfg.codex_binary.clone()).with_log(log.clone()),
-        );
+        let claude = Arc::new(ClaudeBackend::new(cfg.claude_binary.clone()).with_log(log.clone()));
+        let codex = Arc::new(CodexBackend::new(cfg.codex_binary.clone()).with_log(log.clone()));
         let gpt = Arc::new(OpenAiBackend::new(
             cfg.gpt_model.clone(),
             cfg.gpt_system_prompt.clone(),
@@ -160,6 +169,120 @@ impl Worker {
 
     pub fn log_path(&self) -> Option<camino::Utf8PathBuf> {
         self.log.path()
+    }
+
+    /// Manually compact the GPT replay buffer.
+    ///
+    /// **This is the public entry point Wave B's `/compact` slash command will call.**
+    ///
+    /// Module path: `relay_cli::bridge::worker::Worker::compact_gpt_history`
+    /// (or `crate::bridge::worker::Worker::compact_gpt_history` from inside relay).
+    ///
+    /// Behaviour:
+    /// - Always honours [`CompactionConfig::trigger_tokens`]: if the estimated
+    ///   replay-buffer size is at or below the threshold, returns `Ok(None)`
+    ///   without making an LLM call. Slash-command callers can detect this and
+    ///   surface "nothing to compact" to the user.
+    /// - On a triggered compaction, fires one OpenAI Chat Completions request
+    ///   to summarize the older prefix, splices the result into
+    ///   `self.conversation` as a single summary turn, persists, and emits
+    ///   `WorkerEvent::ConversationUpdated`.
+    /// - **Never** touches Claude or Codex history — those use vendor-side
+    ///   `--resume` / `exec resume` ids.
+    /// - Errors from the LLM call propagate; the conversation is left
+    ///   untouched on failure.
+    pub async fn compact_gpt_history(&mut self) -> Result<Option<CompactionResult>> {
+        let summarizer = OpenAiSummarizer::from_env(self.cfg.gpt_model.clone())?;
+        self.compact_gpt_history_with(&summarizer).await
+    }
+
+    /// Same as [`compact_gpt_history`] but with a caller-supplied
+    /// [`Summarizer`]. Exposed for tests and for callers that want to swap in
+    /// a different model/transport.
+    pub async fn compact_gpt_history_with(
+        &mut self,
+        summarizer: &dyn Summarizer,
+    ) -> Result<Option<CompactionResult>> {
+        let result = compaction::compact_conversation(
+            &mut self.conversation,
+            &self.cfg.gpt_system_prompt,
+            &self.cfg.compaction,
+            summarizer,
+        )
+        .await?;
+        if let Some(r) = &result {
+            self.log.write(
+                "compaction",
+                &serde_json::json!({
+                    "trigger": "manual",
+                    "turns_summarized": r.turns_summarized,
+                    "turns_remaining": r.turns_remaining,
+                    "estimated_tokens_before": r.estimated_tokens_before,
+                    "estimated_tokens_after": r.estimated_tokens_after,
+                }),
+            );
+            self.emit_conversation().await;
+            self.emit_status_message(format!(
+                "Compacted {} GPT turns ({} → {} estimated tokens).",
+                r.turns_summarized, r.estimated_tokens_before, r.estimated_tokens_after
+            ))
+            .await;
+        }
+        Ok(result)
+    }
+
+    /// Auto-trigger compaction if the replay buffer is over the configured
+    /// threshold. Errors are logged and swallowed: a failed compaction must
+    /// never break the user's next turn.
+    async fn maybe_auto_compact(&mut self) {
+        if !self.cfg.compaction.auto_enabled {
+            return;
+        }
+        let estimated = compaction::estimate_replay_tokens(
+            &self.cfg.gpt_system_prompt,
+            &self.conversation.turns,
+        );
+        if estimated <= self.cfg.compaction.trigger_tokens {
+            return;
+        }
+        // Only auto-compact when we have an OpenAI key; otherwise this would
+        // surface a noisy error every turn for users on Claude/Codex only.
+        let summarizer = match OpenAiSummarizer::from_env(self.cfg.gpt_model.clone()) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        match compaction::compact_conversation(
+            &mut self.conversation,
+            &self.cfg.gpt_system_prompt,
+            &self.cfg.compaction,
+            &summarizer,
+        )
+        .await
+        {
+            Ok(Some(r)) => {
+                self.log.write(
+                    "compaction",
+                    &serde_json::json!({
+                        "trigger": "auto",
+                        "turns_summarized": r.turns_summarized,
+                        "turns_remaining": r.turns_remaining,
+                        "estimated_tokens_before": r.estimated_tokens_before,
+                        "estimated_tokens_after": r.estimated_tokens_after,
+                    }),
+                );
+                self.emit_conversation().await;
+                self.emit_status_message(format!(
+                    "Auto-compacted {} GPT turns ({} → {} estimated tokens).",
+                    r.turns_summarized, r.estimated_tokens_before, r.estimated_tokens_after
+                ))
+                .await;
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::warn!(%err, "auto-compaction failed");
+                self.log.write("compaction_error", &format!("auto: {err}"));
+            }
+        }
     }
 
     pub async fn run(mut self, mut commands: mpsc::Receiver<WorkerCommand>) -> Result<()> {
@@ -357,6 +480,10 @@ impl Worker {
                 self.conversation
                     .finalise_turn(streaming_id, TurnStatus::Complete);
                 self.emit_conversation().await;
+                // Auto-compact after a successful turn so the next replay starts
+                // from a smaller buffer. Best-effort: failures are logged, never
+                // surfaced as a turn error.
+                self.maybe_auto_compact().await;
                 self.set_status(WorkerStatus::Idle).await;
             }
             Err(err) => {
@@ -367,7 +494,10 @@ impl Worker {
                     message: err.to_string(),
                 })
                 .await;
-                self.events.send(WorkerEvent::Error(err.to_string())).await.ok();
+                self.events
+                    .send(WorkerEvent::Error(err.to_string()))
+                    .await
+                    .ok();
                 // Return to idle after reporting so new commands can run.
                 self.set_status(WorkerStatus::Idle).await;
             }
@@ -379,7 +509,10 @@ impl Worker {
             return;
         }
         self.status = status.clone();
-        self.events.send(WorkerEvent::StatusChanged(status)).await.ok();
+        self.events
+            .send(WorkerEvent::StatusChanged(status))
+            .await
+            .ok();
     }
 
     async fn emit_conversation(&self) {
@@ -414,7 +547,9 @@ impl Worker {
 
 fn describe_event(ev: &BackendEvent) -> serde_json::Value {
     match ev {
-        BackendEvent::Started { agent } => serde_json::json!({"type": "started", "agent": agent.label()}),
+        BackendEvent::Started { agent } => {
+            serde_json::json!({"type": "started", "agent": agent.label()})
+        }
         BackendEvent::TextDelta { agent, text } => serde_json::json!({
             "type": "text_delta",
             "agent": agent.label(),

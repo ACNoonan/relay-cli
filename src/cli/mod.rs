@@ -167,6 +167,10 @@ pub enum Commands {
         /// Resume a prior conversation by UUID (under `.agent-harness/conversations/`)
         #[arg(long)]
         resume: Option<String>,
+        /// Skip the fuzzy resume picker and start a fresh conversation even
+        /// when prior conversations exist.
+        #[arg(long, conflicts_with = "resume")]
+        new: bool,
     },
 }
 

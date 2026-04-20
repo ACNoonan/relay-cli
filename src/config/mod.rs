@@ -14,6 +14,71 @@ pub struct HarnessConfig {
     pub providers: HashMap<String, ProviderConfig>,
     #[serde(default)]
     pub roles: HashMap<String, RoleConfig>,
+    #[serde(default)]
+    pub ui: UiConfig,
+    /// Tunables for the multi-agent bridge (`relay chat`). Currently scopes only
+    /// the GPT replay-buffer compaction pass; left as a top-level table so it
+    /// can grow without further migrations.
+    #[serde(default)]
+    pub bridge: BridgeConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BridgeConfig {
+    #[serde(default)]
+    pub compaction: CompactionConfigToml,
+}
+
+/// On-disk representation of
+/// [`relay_cli::bridge::compaction::CompactionConfig`][crate::bridge::compaction::CompactionConfig].
+/// Kept as a separate type so the config crate doesn't depend on `bridge`
+/// internals; the bridge layer maps this to its runtime struct.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactionConfigToml {
+    #[serde(default = "default_compaction_auto_enabled")]
+    pub auto_enabled: bool,
+    /// Estimated-token threshold at which auto-compaction fires. Default `32_000`
+    /// — roughly a quarter of GPT-5.4's headline 128k context window.
+    #[serde(default = "default_compaction_trigger_tokens")]
+    pub trigger_tokens: usize,
+    #[serde(default = "default_compaction_keep_recent_tokens")]
+    pub keep_recent_tokens: usize,
+    #[serde(default = "default_compaction_min_keep_turns")]
+    pub min_keep_turns: usize,
+}
+
+impl Default for CompactionConfigToml {
+    fn default() -> Self {
+        Self {
+            auto_enabled: default_compaction_auto_enabled(),
+            trigger_tokens: default_compaction_trigger_tokens(),
+            keep_recent_tokens: default_compaction_keep_recent_tokens(),
+            min_keep_turns: default_compaction_min_keep_turns(),
+        }
+    }
+}
+
+fn default_compaction_auto_enabled() -> bool {
+    true
+}
+fn default_compaction_trigger_tokens() -> usize {
+    32_000
+}
+fn default_compaction_keep_recent_tokens() -> usize {
+    8_000
+}
+fn default_compaction_min_keep_turns() -> usize {
+    4
+}
+
+/// User-facing TUI/chat preferences.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UiConfig {
+    /// Built-in name (`amber`/`dark`/`light`) or a custom theme file
+    /// at `~/.config/relay/themes/<name>.json`.
+    /// Overridden by the `RELAY_THEME` environment variable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

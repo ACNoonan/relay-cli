@@ -217,11 +217,12 @@ impl AgentBackend for ClaudeBackend {
         let stderr_text = stderr_task.await.unwrap_or_default();
         self.log.write_subprocess_stderr("claude", &stderr_text);
         if !status.success() {
-            let hint = if stderr_text.to_lowercase().contains("api key") || stderr_text.contains("401") {
-                "  (hint: `--bare` requires ANTHROPIC_API_KEY; OAuth / keychain are not read)"
-            } else {
-                ""
-            };
+            let hint =
+                if stderr_text.to_lowercase().contains("api key") || stderr_text.contains("401") {
+                    "  (hint: `--bare` requires ANTHROPIC_API_KEY; OAuth / keychain are not read)"
+                } else {
+                    ""
+                };
             let msg = format!(
                 "Claude subprocess failed (code {:?}): {}{hint}",
                 status.code(),
@@ -242,7 +243,10 @@ impl AgentBackend for ClaudeBackend {
             let msg = if stderr_text.trim().is_empty() {
                 "Claude exited without emitting any output.".to_string()
             } else {
-                format!("Claude exited without output. stderr: {}", stderr_text.trim())
+                format!(
+                    "Claude exited without output. stderr: {}",
+                    stderr_text.trim()
+                )
             };
             events
                 .send(BackendEvent::Error {

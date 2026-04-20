@@ -8,15 +8,19 @@ pub mod agent;
 mod chat_log;
 mod claude_backend;
 mod codex_backend;
+pub mod compaction;
 pub mod conversation;
 mod openai_client;
-mod persist;
+pub(crate) mod persist;
+pub mod session_picker;
 mod tui_chat;
 pub mod worker;
 
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 
+use crate::config::HarnessConfig;
+use crate::storage::Storage;
 use conversation::{Agent, Conversation};
 use persist::ConversationStore;
 use worker::{WorkerConfig, DEFAULT_GPT_SYSTEM_PROMPT, DEFAULT_HANDOFF_TEMPLATE};
@@ -58,6 +62,7 @@ pub async fn run(options: BridgeOptions) -> Result<()> {
         handoff_template: DEFAULT_HANDOFF_TEMPLATE.into(),
         harness_root: Some(camino::Utf8PathBuf::from(".agent-harness")),
         resume_conversation: None,
+        compaction: compaction::CompactionConfig::default().with_env_overrides(),
     };
 
     // NOTE: `resume_session_id` is a Claude-only flag from the legacy split-pane bridge.
@@ -86,6 +91,9 @@ pub struct ChatOptions {
     pub system_prompt_file: Option<String>,
     pub auto_handoff: bool,
     pub resume_conversation_id: Option<uuid::Uuid>,
+    /// Set by `--new`: skip the auto-opening fuzzy picker and start fresh
+    /// even when prior conversations exist.
+    pub skip_picker: bool,
     pub harness_root: Utf8PathBuf,
 }
 
@@ -96,7 +104,16 @@ pub async fn run_chat(opts: ChatOptions) -> Result<()> {
         None => DEFAULT_GPT_SYSTEM_PROMPT.to_string(),
     };
 
-    let resume_conversation = match opts.resume_conversation_id {
+    // If the caller didn't pre-pick a conversation and didn't pass `--new`,
+    // open the fuzzy picker. Returning `None` from the picker (cancel or
+    // explicit "New conversation" sentinel) means start fresh.
+    let resolved_resume_id = match opts.resume_conversation_id {
+        Some(id) => Some(id),
+        None if opts.skip_picker => None,
+        None => session_picker::pick_session(&opts.harness_root).await?,
+    };
+
+    let resume_conversation = match resolved_resume_id {
         Some(id) => {
             let store = ConversationStore::open(Some(opts.harness_root.clone()));
             if !store.is_enabled() {
@@ -120,6 +137,23 @@ pub async fn run_chat(opts: ChatOptions) -> Result<()> {
         .map(|c| c.auto_handoff_enabled)
         .unwrap_or(opts.auto_handoff);
 
+    // Pull `[bridge.compaction]` from the user's harness config when available;
+    // fall back to defaults otherwise. Env vars take final precedence so ops
+    // can override without editing the file.
+    let compaction_cfg = {
+        let storage = Storage::new(opts.harness_root.clone());
+        let from_disk = if storage.is_initialized() {
+            HarnessConfig::load(&storage.config_path()).ok()
+        } else {
+            None
+        };
+        let toml_view = from_disk
+            .as_ref()
+            .map(|h| h.bridge.compaction.clone())
+            .unwrap_or_default();
+        compaction::CompactionConfig::from_toml(&toml_view).with_env_overrides()
+    };
+
     let cfg = WorkerConfig {
         claude_binary: opts.claude_binary,
         codex_binary: opts.codex_binary,
@@ -131,6 +165,7 @@ pub async fn run_chat(opts: ChatOptions) -> Result<()> {
         handoff_template: DEFAULT_HANDOFF_TEMPLATE.into(),
         harness_root: Some(opts.harness_root),
         resume_conversation,
+        compaction: compaction_cfg,
     };
 
     tui_chat::run(cfg, opts.prompt).await

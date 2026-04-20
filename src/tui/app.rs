@@ -45,7 +45,7 @@ pub fn run_app(harness_root: Utf8PathBuf) -> Result<()> {
     }));
 
     let mut state = AppState::new();
-    let styles = Styles::new();
+    let styles = Styles::load(Some(harness_root.as_path()));
 
     // Initial data load
     state.data = data::load_snapshot(&harness_root);

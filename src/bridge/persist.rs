@@ -19,9 +19,7 @@ pub struct ConversationStore {
 impl ConversationStore {
     /// Construct a store if the given harness root is initialised; otherwise a no-op store.
     pub fn open(root: Option<Utf8PathBuf>) -> Self {
-        let storage = root
-            .map(Storage::new)
-            .filter(|s| s.is_initialized());
+        let storage = root.map(Storage::new).filter(|s| s.is_initialized());
         Self { storage }
     }
 
@@ -54,10 +52,13 @@ impl ConversationStore {
             anyhow::bail!("no harness initialised; cannot load conversation {id}");
         };
         let path = storage.conversation_json_path(id);
-        let bytes = fs::read(path.as_std_path())
-            .with_context(|| format!("reading conversation {path}"))?;
-        let conv: Conversation =
+        let bytes =
+            fs::read(path.as_std_path()).with_context(|| format!("reading conversation {path}"))?;
+        let mut conv: Conversation =
             serde_json::from_slice(&bytes).context("parsing conversation json")?;
+        // Bring older on-disk formats up to the current shape transparently. This is the
+        // boundary where we honour the `CONVERSATION_SCHEMA_VERSION` contract.
+        conv.upgrade_in_place();
         Ok(conv)
     }
 }
@@ -92,7 +93,61 @@ fn render_markdown(conv: &Conversation) -> String {
         } else if turn.status == TurnStatus::Streaming {
             out.push_str("  _(interrupted while streaming)_");
         }
-        out.push_str(&format!("\n_{}_\n\n{}\n\n", turn.ts.to_rfc3339(), turn.content));
+        out.push_str(&format!(
+            "\n_{}_\n\n{}\n\n",
+            turn.ts.to_rfc3339(),
+            turn.content
+        ));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bridge::conversation::{Agent, Role, Turn, TurnStatus, CONVERSATION_SCHEMA_VERSION};
+    use camino::Utf8PathBuf;
+    use tempfile::TempDir;
+
+    fn store_in(tmp: &TempDir) -> ConversationStore {
+        let root =
+            Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).expect("tempdir path is utf-8");
+        // Storage::is_initialized() looks for config.toml — write an empty one so the
+        // store enables persistence.
+        std::fs::write(root.join("config.toml").as_std_path(), b"").unwrap();
+        std::fs::create_dir_all(root.join("conversations").as_std_path()).unwrap();
+        ConversationStore::open(Some(root))
+    }
+
+    #[test]
+    fn compacted_conversation_round_trips() {
+        let tmp = TempDir::new().expect("tempdir");
+        let store = store_in(&tmp);
+
+        let mut conv = Conversation::new(Agent::Gpt, true);
+        conv.turns.push(Turn::new(
+            Agent::Gpt,
+            Role::User,
+            "first thing",
+            TurnStatus::Complete,
+        ));
+        conv.turns
+            .push(Turn::new_summary("rolled-up earlier work", 12));
+        conv.turns.push(Turn::new(
+            Agent::Gpt,
+            Role::Assistant,
+            "current reply",
+            TurnStatus::Complete,
+        ));
+        conv.summary = Some("rolled-up earlier work".into());
+
+        store.save(&conv).expect("save");
+        let loaded = store.load(conv.id).expect("load");
+
+        assert_eq!(loaded.schema_version, CONVERSATION_SCHEMA_VERSION);
+        assert_eq!(loaded.turns.len(), 3);
+        assert!(loaded.turns[1].is_summary());
+        assert_eq!(loaded.turns[1].summarized_turn_count, Some(12));
+        assert_eq!(loaded.summary.as_deref(), Some("rolled-up earlier work"));
+    }
 }

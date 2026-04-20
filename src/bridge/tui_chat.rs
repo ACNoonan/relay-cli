@@ -380,7 +380,10 @@ fn render_agent_ring(f: &mut Frame<'_>, area: Rect, state: &UiState) {
         .map(|id| format!("  session:{}", &id[..id.len().min(8)]))
         .unwrap_or_default();
     spans.push(Span::styled(
-        format!("   auto-handoff:{}", if auto_handoff { "on" } else { "off" }),
+        format!(
+            "   auto-handoff:{}",
+            if auto_handoff { "on" } else { "off" }
+        ),
         Style::default().add_modifier(Modifier::DIM),
     ));
     if !session_hint.is_empty() {

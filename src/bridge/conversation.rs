@@ -84,6 +84,12 @@ pub struct Turn {
     pub content: String,
     pub ts: DateTime<Utc>,
     pub status: TurnStatus,
+    /// When `Some(n)`, this turn is a synthesized summary that replaces `n` original
+    /// older turns (produced by [`super::compaction`]). Carried in the schema so a
+    /// reload can tell that the buffer head is a compaction artefact rather than a
+    /// real user/assistant exchange.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summarized_turn_count: Option<usize>,
 }
 
 impl Turn {
@@ -95,7 +101,27 @@ impl Turn {
             content: content.into(),
             ts: Utc::now(),
             status,
+            summarized_turn_count: None,
         }
+    }
+
+    /// Construct a summary turn that stands in for `summarized_count` older turns.
+    /// Always created as a `System`-role turn attributed to GPT, so existing exhaustive
+    /// matches over `Role` continue to compile and render the line as a system message.
+    pub fn new_summary(content: impl Into<String>, summarized_count: usize) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            agent: Agent::Gpt,
+            role: Role::System,
+            content: content.into(),
+            ts: Utc::now(),
+            status: TurnStatus::Complete,
+            summarized_turn_count: Some(summarized_count),
+        }
+    }
+
+    pub fn is_summary(&self) -> bool {
+        self.summarized_turn_count.is_some()
     }
 }
 
@@ -130,23 +156,41 @@ impl AgentSessionState {
     }
 }
 
+/// Current `conversation.json` schema version. Bump whenever the on-disk shape changes
+/// in a way that older relay binaries cannot transparently read; pair with a migration
+/// branch in [`Conversation::upgrade_in_place`].
+pub const CONVERSATION_SCHEMA_VERSION: u32 = 2;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conversation {
+    /// Schema version for the on-disk JSON. Defaults to `1` when missing so legacy
+    /// files written before this field existed deserialize without losing data; the
+    /// loader runs [`Conversation::upgrade_in_place`] to bring it to the current
+    /// version after parse.
+    #[serde(default = "default_schema_version_v1")]
+    pub schema_version: u32,
     pub id: Uuid,
     pub turns: Vec<Turn>,
     pub active_agent: Agent,
     pub sessions: AgentSessionState,
     pub auto_handoff_enabled: bool,
-    /// Optional rolling summary, to be populated by a future compaction pass.
+    /// Optional rolling summary maintained by [`super::compaction`]. Mirrors the most
+    /// recent summary turn's content; convenient for callers that want the prose
+    /// without scanning `turns`.
     pub summary: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+fn default_schema_version_v1() -> u32 {
+    1
 }
 
 impl Conversation {
     pub fn new(active_agent: Agent, auto_handoff_enabled: bool) -> Self {
         let now = Utc::now();
         Self {
+            schema_version: CONVERSATION_SCHEMA_VERSION,
             id: Uuid::new_v4(),
             turns: Vec::new(),
             active_agent,
@@ -156,6 +200,20 @@ impl Conversation {
             created_at: now,
             updated_at: now,
         }
+    }
+
+    /// Upgrade an in-memory `Conversation` deserialized from an older schema to the
+    /// current one. Pure transformations only: never touches disk, never loses data.
+    /// Anticipates Tier 2 #8 (centralised schema migrations) without blocking on it.
+    pub fn upgrade_in_place(&mut self) {
+        if self.schema_version < 2 {
+            // v1 → v2: introduced `Turn.summarized_turn_count`. Pre-existing turns are
+            // not summaries, so the serde default of `None` is already correct; we just
+            // bump the version marker so saves round-trip cleanly.
+            self.schema_version = 2;
+        }
+        // Future migrations chain here.
+        debug_assert!(self.schema_version == CONVERSATION_SCHEMA_VERSION);
     }
 
     pub fn append_turn(&mut self, turn: Turn) -> &Turn {
@@ -250,6 +308,43 @@ mod tests {
         let t = c.last_assistant_turn().unwrap();
         assert_eq!(t.content, "hello world");
         assert_eq!(t.status, TurnStatus::Complete);
+    }
+
+    #[test]
+    fn summary_turn_round_trips_with_count() {
+        let t = Turn::new_summary("rolled-up history", 7);
+        assert!(t.is_summary());
+        assert_eq!(t.summarized_turn_count, Some(7));
+        assert_eq!(t.role, Role::System);
+        assert_eq!(t.agent, Agent::Gpt);
+
+        let json = serde_json::to_string(&t).expect("serialize");
+        let back: Turn = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.summarized_turn_count, Some(7));
+        assert!(back.is_summary());
+    }
+
+    #[test]
+    fn legacy_json_without_schema_version_upgrades() {
+        // Mimic a v1 conversation.json that pre-dates the schema_version field
+        // and the summarized_turn_count flag on Turn.
+        let id = Uuid::new_v4();
+        let now = Utc::now().to_rfc3339();
+        let raw = serde_json::json!({
+            "id": id,
+            "turns": [],
+            "active_agent": "gpt",
+            "sessions": {},
+            "auto_handoff_enabled": true,
+            "summary": null,
+            "created_at": now,
+            "updated_at": now,
+        });
+        let mut conv: Conversation =
+            serde_json::from_value(raw).expect("legacy json should deserialize");
+        assert_eq!(conv.schema_version, 1);
+        conv.upgrade_in_place();
+        assert_eq!(conv.schema_version, CONVERSATION_SCHEMA_VERSION);
     }
 
     #[test]
