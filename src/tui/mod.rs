@@ -4,7 +4,9 @@ mod data;
 mod events;
 mod screens;
 mod state;
-mod theme;
+// `theme` is `pub(crate)` so the bridge chat TUI can reuse `Styles` without
+// duplicating the loader — see `src/bridge/tui_chat.rs`.
+pub(crate) mod theme;
 mod widgets;
 
 use anyhow::{Context, Result};

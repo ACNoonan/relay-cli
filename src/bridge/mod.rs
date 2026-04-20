@@ -13,6 +13,7 @@ pub mod conversation;
 mod openai_client;
 pub(crate) mod persist;
 pub mod session_picker;
+mod slash;
 mod tui_chat;
 pub mod worker;
 

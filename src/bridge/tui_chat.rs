@@ -13,6 +13,7 @@
 //!
 //! Keybindings:
 //!   Enter            send typed input to the active agent
+//!                    (or execute a `/command` — see `/help`)
 //!   Shift+Right      rotate to next agent, auto-handoff last assistant turn
 //!   Shift+Left       rotate to previous agent, auto-handoff last assistant turn
 //!   Tab              rotate to next agent WITHOUT handoff (focus-only)
@@ -24,6 +25,7 @@
 //!   Ctrl+C / q(empty input)   quit
 
 use anyhow::{Context, Result};
+use camino::Utf8PathBuf;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
@@ -41,11 +43,19 @@ use std::{io, time::Duration};
 use tokio::sync::mpsc;
 
 use super::conversation::{Agent, Conversation, Role, TurnStatus};
+use super::persist::ConversationStore;
+use super::session_picker;
+use super::slash::{self, CommandRegistry, Severity, SlashOutcome, BUILTIN_COMMANDS};
 use super::worker::{Worker, WorkerCommand, WorkerConfig, WorkerEvent, WorkerStatus};
+use crate::tui::theme::Styles;
 
 pub async fn run(cfg: WorkerConfig, initial_prompt: Option<String>) -> Result<()> {
     let (ev_tx, mut ev_rx) = mpsc::channel::<WorkerEvent>(1024);
     let (cmd_tx, cmd_rx) = mpsc::channel::<WorkerCommand>(64);
+
+    // Surface these before the worker takes ownership of the config.
+    let harness_root = cfg.harness_root.clone();
+    let styles = Styles::load(harness_root.as_deref());
 
     let worker = Worker::new(cfg, ev_tx)?;
     let log_path = worker.log_path();
@@ -67,7 +77,7 @@ pub async fn run(cfg: WorkerConfig, initial_prompt: Option<String>) -> Result<()
         }
     }
 
-    let result = run_ui(&mut ev_rx, &cmd_tx, log_path);
+    let result = run_ui(&mut ev_rx, &cmd_tx, log_path, harness_root, &styles).await;
     // Ensure worker shuts down cleanly.
     let _ = cmd_tx.send(WorkerCommand::Quit).await;
     let _ = worker_task.await;
@@ -91,12 +101,31 @@ struct UiState {
     last_snapshot_path: Option<String>,
     /// Path of the worker's chat log, shown once at startup so the user knows where to look.
     log_path_banner: Option<String>,
+    /// Ephemeral, UI-local messages produced by slash commands (help output,
+    /// error messages, copy confirmations, …). Rendered inline at the tail
+    /// of the conversation log as `system`-styled lines. Not persisted —
+    /// these are transient feedback, not part of the dialogue.
+    system_notes: Vec<SystemNote>,
 }
 
-fn run_ui(
+/// A single inline system message produced by the slash-command layer.
+/// Kept separate from [`super::conversation::Turn`] (a) to avoid polluting
+/// the persisted transcript with UI ephemera, and (b) because Tier 1 #3
+/// (markdown rendering) will overhaul turn rendering, and we want these
+/// not to be caught up in that refactor.
+struct SystemNote {
+    severity: Severity,
+    /// Each entry is one rendered line. Multi-line output (e.g. `/help`) pushes
+    /// one note containing many lines so the block stays visually grouped.
+    lines: Vec<String>,
+}
+
+async fn run_ui(
     rx: &mut mpsc::Receiver<WorkerEvent>,
     cmd_tx: &mpsc::Sender<WorkerCommand>,
     log_path: Option<camino::Utf8PathBuf>,
+    harness_root: Option<Utf8PathBuf>,
+    styles: &Styles,
 ) -> Result<()> {
     enable_raw_mode().context("enabling raw mode for chat TUI")?;
     let mut stdout = io::stdout();
@@ -106,15 +135,19 @@ fn run_ui(
 
     let mut state = UiState {
         status_message: match &log_path {
-            Some(p) => format!("Ready. Type to chat — Shift+←/→ rotate, Ctrl+L snapshot. log: {p}"),
-            None => "Ready. Type to chat — Shift+←/→ rotate, Ctrl+L snapshot.".to_string(),
+            Some(p) => format!(
+                "Ready. Type to chat or /help — Shift+←/→ rotate, Ctrl+L snapshot. log: {p}"
+            ),
+            None => "Ready. Type to chat or /help — Shift+←/→ rotate, Ctrl+L snapshot.".to_string(),
         },
         follow_tail: true,
         log_path_banner: log_path.as_ref().map(|p| p.to_string()),
         ..UiState::default()
     };
 
-    let result = (|| -> Result<()> {
+    let registry = CommandRegistry::builtins();
+
+    let result: Result<()> = async {
         loop {
             drain_worker_events(rx, &mut state);
             if state.quit_requested {
@@ -122,7 +155,7 @@ fn run_ui(
             }
 
             terminal
-                .draw(|f| render(f, &state))
+                .draw(|f| render(f, &state, styles))
                 .context("drawing chat UI")?;
 
             // Honour a queued snapshot request AFTER the frame has been drawn, so the
@@ -145,18 +178,121 @@ fn run_ui(
                     if key.kind == KeyEventKind::Release {
                         continue;
                     }
-                    if !handle_key(key.code, key.modifiers, &mut state, cmd_tx) {
-                        break;
+                    let action = handle_key(key.code, key.modifiers, &mut state, cmd_tx, &registry);
+                    match action {
+                        KeyAction::Continue => {}
+                        KeyAction::Quit => break,
+                        KeyAction::OpenResumePicker => {
+                            handle_resume(
+                                &mut terminal,
+                                &mut state,
+                                cmd_tx,
+                                harness_root.as_deref(),
+                            )
+                            .await;
+                        }
                     }
                 }
             }
         }
         Ok(())
-    })();
+    }
+    .await;
 
     disable_raw_mode().ok();
     execute!(terminal.backend_mut(), LeaveAlternateScreen).ok();
     result
+}
+
+/// What `handle_key` wants the caller (the event loop) to do next. Breaking
+/// this out keeps the keymap itself synchronous and small; async work (like
+/// opening the session picker) happens in the loop body, not in the match.
+enum KeyAction {
+    Continue,
+    Quit,
+    OpenResumePicker,
+}
+
+/// Suspend the chat TUI's raw-mode + alt-screen for the duration of the
+/// picker, invoke `session_picker::pick_session`, and — if the user selected
+/// a conversation — load it from disk and send a `LoadConversation` command
+/// to the worker. The picker manages its own terminal state, so we just
+/// step out of the way cleanly and step back in afterwards.
+async fn handle_resume(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    state: &mut UiState,
+    cmd_tx: &mpsc::Sender<WorkerCommand>,
+    harness_root: Option<&camino::Utf8Path>,
+) {
+    let Some(root) = harness_root else {
+        push_note(
+            state,
+            Severity::Error,
+            vec!["/resume: no harness initialised (run `relay init` first).".to_string()],
+        );
+        return;
+    };
+
+    // Suspend our terminal state. The picker will enter its own alt-screen.
+    disable_raw_mode().ok();
+    execute!(terminal.backend_mut(), LeaveAlternateScreen).ok();
+
+    let picked = session_picker::pick_session(root).await;
+
+    // Whatever happened, put our terminal back together before continuing.
+    let _ = enable_raw_mode();
+    let _ = execute!(terminal.backend_mut(), EnterAlternateScreen);
+    let _ = terminal.clear();
+
+    match picked {
+        Err(err) => push_note(
+            state,
+            Severity::Error,
+            vec![format!("/resume failed: {err}")],
+        ),
+        Ok(None) => push_note(
+            state,
+            Severity::Info,
+            vec!["/resume: cancelled.".to_string()],
+        ),
+        Ok(Some(id)) => {
+            let store = ConversationStore::open(Some(root.to_path_buf()));
+            if !store.is_enabled() {
+                push_note(
+                    state,
+                    Severity::Error,
+                    vec!["/resume: harness not initialised.".to_string()],
+                );
+                return;
+            }
+            match store.load(id) {
+                Ok(conv) => {
+                    let _ = cmd_tx
+                        .send(WorkerCommand::LoadConversation(Box::new(conv)))
+                        .await;
+                    push_note(
+                        state,
+                        Severity::Success,
+                        vec![format!("/resume: loaded {}.", short_uuid(&id.to_string()))],
+                    );
+                }
+                Err(err) => push_note(
+                    state,
+                    Severity::Error,
+                    vec![format!("/resume: load failed — {err}")],
+                ),
+            }
+        }
+    }
+}
+
+fn push_note(state: &mut UiState, severity: Severity, lines: Vec<String>) {
+    state.follow_tail = true;
+    state.system_notes.push(SystemNote { severity, lines });
+}
+
+fn short_uuid(s: &str) -> String {
+    s.chars().take(8).collect()
 }
 
 fn dump_buffer_snapshot(
@@ -225,24 +361,27 @@ fn drain_worker_events(rx: &mut mpsc::Receiver<WorkerEvent>, state: &mut UiState
     }
 }
 
-/// Returns false if the UI should exit.
+/// Handle a single key event. Returns a [`KeyAction`] telling the event loop
+/// whether to continue, exit, or perform an async side-effect (currently
+/// only opening the session picker for `/resume`).
 fn handle_key(
     code: KeyCode,
     mods: KeyModifiers,
     state: &mut UiState,
     cmd_tx: &mpsc::Sender<WorkerCommand>,
-) -> bool {
+    registry: &CommandRegistry,
+) -> KeyAction {
     let ctrl = mods.contains(KeyModifiers::CONTROL);
     let shift = mods.contains(KeyModifiers::SHIFT);
 
     match (code, ctrl, shift) {
         (KeyCode::Char('c'), true, _) => {
             state.quit_requested = true;
-            return false;
+            return KeyAction::Quit;
         }
         (KeyCode::Char('q'), false, false) if state.input.is_empty() => {
             state.quit_requested = true;
-            return false;
+            return KeyAction::Quit;
         }
         (KeyCode::Char('n'), true, _) => {
             let _ = cmd_tx.try_send(WorkerCommand::NewConversation);
@@ -283,12 +422,19 @@ fn handle_key(
         (KeyCode::Enter, _, _) => {
             let text = std::mem::take(&mut state.input);
             let trimmed = text.trim();
-            if !trimmed.is_empty() {
-                state.follow_tail = true;
-                let _ = cmd_tx.try_send(WorkerCommand::SendToActive {
-                    prompt: trimmed.to_string(),
-                });
+            if trimmed.is_empty() {
+                return KeyAction::Continue;
             }
+            // Slash commands are intercepted here; anything else flows to the
+            // active backend unchanged.
+            if let Some(parsed) = slash::parse(trimmed) {
+                let outcome = slash::resolve(&parsed, registry);
+                return apply_outcome(outcome, state, cmd_tx);
+            }
+            state.follow_tail = true;
+            let _ = cmd_tx.try_send(WorkerCommand::SendToActive {
+                prompt: trimmed.to_string(),
+            });
         }
         (KeyCode::Esc, _, _) => {
             state.input.clear();
@@ -315,10 +461,162 @@ fn handle_key(
         }
         _ => {}
     }
-    true
+    KeyAction::Continue
 }
 
-fn render(f: &mut Frame<'_>, state: &UiState) {
+/// Apply a [`SlashOutcome`] against `UiState` / the worker command channel.
+///
+/// This is the only code path that can ask the event loop to open the
+/// session picker (the outcome [`SlashOutcome::RequireSessionPick`] maps to
+/// [`KeyAction::OpenResumePicker`]). Everything else is local or sent via
+/// the worker channel.
+fn apply_outcome(
+    outcome: SlashOutcome,
+    state: &mut UiState,
+    cmd_tx: &mpsc::Sender<WorkerCommand>,
+) -> KeyAction {
+    match outcome {
+        SlashOutcome::Consumed => KeyAction::Continue,
+        SlashOutcome::ShowMessage(msg, sev) => {
+            push_note(state, sev, vec![msg]);
+            KeyAction::Continue
+        }
+        SlashOutcome::ShowHelp => {
+            push_note(state, Severity::Info, help_lines());
+            KeyAction::Continue
+        }
+        SlashOutcome::ShowHotkeys => {
+            push_note(state, Severity::Info, hotkey_lines());
+            KeyAction::Continue
+        }
+        SlashOutcome::ClearConversation => {
+            let _ = cmd_tx.try_send(WorkerCommand::NewConversation);
+            let short = state
+                .conversation
+                .as_ref()
+                .map(|c| short_uuid(&c.id.to_string()))
+                .unwrap_or_else(|| "new".to_string());
+            push_note(
+                state,
+                Severity::Success,
+                vec![format!("/new: started new conversation {short}.")],
+            );
+            KeyAction::Continue
+        }
+        SlashOutcome::RequireSessionPick => KeyAction::OpenResumePicker,
+        SlashOutcome::Compact => {
+            let _ = cmd_tx.try_send(WorkerCommand::CompactNow);
+            push_note(
+                state,
+                Severity::Info,
+                vec!["/compact: requested — watch the status bar for results.".to_string()],
+            );
+            KeyAction::Continue
+        }
+        SlashOutcome::Copy => {
+            match copy_last_assistant(state) {
+                Ok(len) => push_note(
+                    state,
+                    Severity::Success,
+                    vec![format!(
+                        "/copy: {len} chars of the last assistant message copied to clipboard."
+                    )],
+                ),
+                Err(msg) => push_note(state, Severity::Error, vec![format!("/copy: {msg}")]),
+            }
+            KeyAction::Continue
+        }
+        SlashOutcome::Handoff(agent) => {
+            let _ = cmd_tx.try_send(WorkerCommand::RotateTo {
+                agent,
+                handoff_last_assistant: true,
+            });
+            push_note(
+                state,
+                Severity::Info,
+                vec![format!("/handoff → {}.", agent.label())],
+            );
+            KeyAction::Continue
+        }
+        SlashOutcome::Focus(agent) => {
+            let _ = cmd_tx.try_send(WorkerCommand::RotateTo {
+                agent,
+                handoff_last_assistant: false,
+            });
+            push_note(
+                state,
+                Severity::Info,
+                vec![format!("/focus → {}.", agent.label())],
+            );
+            KeyAction::Continue
+        }
+        SlashOutcome::Quit => {
+            state.quit_requested = true;
+            KeyAction::Quit
+        }
+    }
+}
+
+/// Build the inline `/help` body from the registry.
+fn help_lines() -> Vec<String> {
+    let mut out = Vec::with_capacity(BUILTIN_COMMANDS.len() + 2);
+    out.push("Slash commands:".to_string());
+    for entry in BUILTIN_COMMANDS {
+        let suffix = if entry.args_hint.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", entry.args_hint)
+        };
+        out.push(format!(
+            "  /{name}{suffix}  —  {desc}",
+            name = entry.name,
+            suffix = suffix,
+            desc = entry.description,
+        ));
+    }
+    out.push("Tip: `/?` is a shortcut for `/help`.".to_string());
+    out
+}
+
+/// Build the inline `/hotkeys` body. Source of truth is this list — mirrors
+/// the module-top-of-file comment.
+fn hotkey_lines() -> Vec<String> {
+    vec![
+        "Hotkeys:".to_string(),
+        "  Enter            send input (or run /command)".to_string(),
+        "  Shift+Right/Left rotate agent + auto-handoff last turn".to_string(),
+        "  Tab              rotate agent focus-only (no handoff)".to_string(),
+        "  Ctrl+N           clear conversation + session state".to_string(),
+        "  Ctrl+H           toggle auto-handoff-on-rotate".to_string(),
+        "  Ctrl+L           snapshot the current TUI buffer to a file".to_string(),
+        "  PgUp/PgDn        scroll conversation log".to_string(),
+        "  Home / End       jump to top / follow tail".to_string(),
+        "  Esc              clear input".to_string(),
+        "  Ctrl+C           quit".to_string(),
+    ]
+}
+
+/// Copy the most recent assistant turn to the system clipboard. Returns the
+/// character count on success, or a user-facing error message on failure.
+fn copy_last_assistant(state: &UiState) -> Result<usize, String> {
+    let Some(conv) = &state.conversation else {
+        return Err("no conversation yet.".to_string());
+    };
+    let Some(turn) = conv.last_assistant_turn() else {
+        return Err("no assistant message to copy yet.".to_string());
+    };
+    let content = turn.content.clone();
+    let count = content.chars().count();
+    // arboard's Clipboard constructor can fail on headless systems (no
+    // display / no pasteboard); surface a friendly note rather than
+    // crashing.
+    let mut clip = arboard::Clipboard::new().map_err(|e| format!("clipboard unavailable: {e}"))?;
+    clip.set_text(content)
+        .map_err(|e| format!("clipboard write failed: {e}"))?;
+    Ok(count)
+}
+
+fn render(f: &mut Frame<'_>, state: &UiState, styles: &Styles) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -332,7 +630,7 @@ fn render(f: &mut Frame<'_>, state: &UiState) {
         .split(f.area());
 
     render_agent_ring(f, chunks[0], state);
-    render_conversation(f, chunks[1], state);
+    render_conversation(f, chunks[1], state, styles);
     // chunks[2] deliberately left blank as a spacer row.
     render_input(f, chunks[3], state);
     render_status(f, chunks[4], state);
@@ -398,12 +696,12 @@ fn render_agent_ring(f: &mut Frame<'_>, area: Rect, state: &UiState) {
     f.render_widget(para, area);
 }
 
-fn render_conversation(f: &mut Frame<'_>, area: Rect, state: &UiState) {
+fn render_conversation(f: &mut Frame<'_>, area: Rect, state: &UiState, styles: &Styles) {
     let mut lines: Vec<Line<'_>> = Vec::new();
     if let Some(c) = &state.conversation {
         if c.turns.is_empty() {
             lines.push(Line::styled(
-                "No turns yet. Type a prompt and press Enter.",
+                "No turns yet. Type a prompt and press Enter (or /help).",
                 Style::default().add_modifier(Modifier::DIM),
             ));
         }
@@ -447,6 +745,34 @@ fn render_conversation(f: &mut Frame<'_>, area: Rect, state: &UiState) {
             }
             lines.push(Line::raw(""));
         }
+    }
+
+    // Inline slash-command output — appended at the tail so it's always
+    // visible alongside the latest agent turn. Not persisted (UI-local).
+    for note in &state.system_notes {
+        let body_style = match note.severity {
+            Severity::Info => styles.dim(),
+            Severity::Success => styles.success(),
+            Severity::Warning => styles.warning(),
+            Severity::Error => styles.danger(),
+        };
+        let tag = match note.severity {
+            Severity::Info => "system",
+            Severity::Success => "system ✓",
+            Severity::Warning => "system ⚠",
+            Severity::Error => "system ✗",
+        };
+        lines.push(Line::from(vec![Span::styled(
+            tag.to_string(),
+            styles.label(),
+        )]));
+        for l in &note.lines {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(l.clone(), body_style),
+            ]));
+        }
+        lines.push(Line::raw(""));
     }
 
     let block = Block::default()

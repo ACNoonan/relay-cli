@@ -58,6 +58,15 @@ pub enum WorkerCommand {
     NewConversation,
     /// Toggle the auto-handoff-on-rotate behaviour.
     ToggleAutoHandoff,
+    /// Trigger a manual compaction pass on the GPT replay buffer — the
+    /// command-form of [`Worker::compact_gpt_history`]. Used by the
+    /// `/compact` slash command; the worker emits a `StatusMessage` with the
+    /// result (or a "nothing to compact" / "OPENAI_API_KEY not set" note).
+    CompactNow,
+    /// Swap the in-memory conversation with a rehydrated one (loaded by the
+    /// UI via the session picker). Used by `/resume`. Ignored if a turn is
+    /// mid-flight — the UI should only issue this at Idle.
+    LoadConversation(Box<Conversation>),
     /// Request worker shutdown.
     Quit,
 }
@@ -322,6 +331,54 @@ impl Worker {
                     self.run_turn(self.conversation.active_agent, prompt, Role::User)
                         .await;
                 }
+                WorkerCommand::CompactNow => {
+                    if !matches!(self.status, WorkerStatus::Idle) {
+                        self.emit_status_message(
+                            "Busy: wait for current turn to finish before compacting.".into(),
+                        )
+                        .await;
+                        continue;
+                    }
+                    match self.compact_gpt_history().await {
+                        Ok(Some(_)) => {
+                            // compact_gpt_history already emitted a status message.
+                        }
+                        Ok(None) => {
+                            self.emit_status_message(
+                                "Nothing to compact — replay buffer is below threshold.".into(),
+                            )
+                            .await;
+                        }
+                        Err(err) => {
+                            // Most common case: OPENAI_API_KEY missing. Mirror
+                            // maybe_auto_compact's silent/friendly tone.
+                            let text = err.to_string();
+                            let msg = if text.to_lowercase().contains("openai_api_key") {
+                                "GPT compaction unavailable (OPENAI_API_KEY not set).".to_string()
+                            } else {
+                                format!("Compaction failed: {text}")
+                            };
+                            self.emit_status_message(msg).await;
+                        }
+                    }
+                }
+                WorkerCommand::LoadConversation(conv) => {
+                    if !matches!(self.status, WorkerStatus::Idle) {
+                        self.emit_status_message(
+                            "Busy: wait for current turn to finish before resuming.".into(),
+                        )
+                        .await;
+                        continue;
+                    }
+                    self.conversation = *conv;
+                    self.queued_rotation = None;
+                    self.emit_conversation().await;
+                    self.emit_status_message(format!(
+                        "Resumed conversation {}.",
+                        short_id(&self.conversation.id)
+                    ))
+                    .await;
+                }
             }
 
             // If a rotation was queued while a turn was running, apply it now that we're idle.
@@ -584,6 +641,12 @@ fn describe_event(ev: &BackendEvent) -> serde_json::Value {
 // Tiny helper to avoid test_name conflicts with existing tests.
 #[allow(dead_code)]
 fn _noop(_: Uuid) {}
+
+/// Short form of a conversation uuid for user-facing status lines.
+fn short_id(id: &Uuid) -> String {
+    let s = id.to_string();
+    s.chars().take(8).collect()
+}
 
 #[cfg(test)]
 mod tests {

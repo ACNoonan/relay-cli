@@ -49,6 +49,10 @@ shell-words = "1"
 which = "7"
 console = "0.15"
 dialoguer = "0.11"
+# Clipboard — used by the `/copy` slash command to put the last assistant
+# message on the system clipboard. Small (~2.5k lines), actively maintained
+# (1Password), and cross-platform (X11/Wayland/macOS/Windows).
+arboard = "3"
 
 [dev-dependencies]
 tempfile = "3"
