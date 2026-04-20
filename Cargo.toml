@@ -55,7 +55,7 @@ dialoguer = "0.11"
 arboard = "3"
 # Markdown rendering for agent messages in `relay chat`. De-facto Rust
 # CommonMark parser; pure-Rust, actively maintained. See `src/bridge/markdown.rs`.
-pulldown-cmark = { version = "0.13", default-features = false }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 # Syntax highlighting inside fenced code blocks. Uses Sublime-text grammars;
 # we preload the default syntax set + a built-in theme. `default-fancy` is
 # skipped — we ship only the plist-backed defaults to keep binary size down.

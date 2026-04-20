@@ -15,6 +15,8 @@
 //! deliberately not built yet — a plain-text `/help` is sufficient for
 //! discoverability.
 
+use camino::Utf8PathBuf;
+
 use super::conversation::Agent;
 
 /// A successfully parsed `/name args...` line. See [`parse`].
@@ -103,6 +105,7 @@ pub enum SlashCommand {
     Resume,
     Compact,
     Copy,
+    Export,
     Handoff,
     Focus,
     Quit,
@@ -131,6 +134,10 @@ pub enum SlashOutcome {
     Compact,
     /// Copy the last assistant message to the system clipboard.
     Copy,
+    /// Render the current conversation to a self-contained HTML file.
+    /// `path` is `None` when the user typed `/export` with no argument — the
+    /// TUI defaults to `<conversation-dir>/export.html` in that case.
+    Export { path: Option<Utf8PathBuf> },
     /// Rotate focus + auto-handoff last assistant turn to this agent.
     Handoff(Agent),
     /// Rotate focus only (no handoff).
@@ -189,6 +196,12 @@ pub const BUILTIN_COMMANDS: &[BuiltinEntry] = &[
         description: "Copy the last assistant message to the clipboard.",
         kind: SlashCommand::Copy,
         args_hint: "",
+    },
+    BuiltinEntry {
+        name: "export",
+        description: "Export the current conversation as a self-contained HTML file.",
+        kind: SlashCommand::Export,
+        args_hint: "[path]",
     },
     BuiltinEntry {
         name: "handoff",
@@ -258,6 +271,15 @@ pub fn resolve(cmd: &ParsedCommand, registry: &CommandRegistry) -> SlashOutcome 
         SlashCommand::Resume => SlashOutcome::RequireSessionPick,
         SlashCommand::Compact => SlashOutcome::Compact,
         SlashCommand::Copy => SlashOutcome::Copy,
+        SlashCommand::Export => {
+            let trimmed = cmd.args.trim();
+            let path = if trimmed.is_empty() {
+                None
+            } else {
+                Some(Utf8PathBuf::from(trimmed))
+            };
+            SlashOutcome::Export { path }
+        }
         SlashCommand::Quit => SlashOutcome::Quit,
         SlashCommand::Handoff => match parse_agent(&cmd.args) {
             Ok(a) => SlashOutcome::Handoff(a),
@@ -514,9 +536,41 @@ mod tests {
     fn builtins_has_all_expected_commands() {
         let reg = CommandRegistry::builtins();
         for name in [
-            "help", "hotkeys", "new", "resume", "compact", "copy", "handoff", "focus", "quit",
+            "help", "hotkeys", "new", "resume", "compact", "copy", "export", "handoff", "focus",
+            "quit",
         ] {
             assert!(reg.find(name).is_some(), "missing builtin: {name}");
         }
+    }
+
+    #[test]
+    fn resolve_export_without_args_is_default_path() {
+        let reg = CommandRegistry::builtins();
+        let out = resolve(
+            &ParsedCommand {
+                name: "export".into(),
+                args: "".into(),
+            },
+            &reg,
+        );
+        assert_eq!(out, SlashOutcome::Export { path: None });
+    }
+
+    #[test]
+    fn resolve_export_with_path_arg_carries_path() {
+        let reg = CommandRegistry::builtins();
+        let out = resolve(
+            &ParsedCommand {
+                name: "export".into(),
+                args: "  /tmp/out.html  ".into(),
+            },
+            &reg,
+        );
+        assert_eq!(
+            out,
+            SlashOutcome::Export {
+                path: Some(Utf8PathBuf::from("/tmp/out.html"))
+            }
+        );
     }
 }

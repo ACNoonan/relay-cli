@@ -73,11 +73,13 @@ use uuid::Uuid;
 
 use super::conversation::{Agent, Conversation, Role, TurnStatus};
 use super::editor::{KillRing, SlashAutocomplete, UndoStack};
+use super::html_export;
 use super::markdown::render_markdown;
 use super::persist::ConversationStore;
 use super::session_picker;
 use super::slash::{self, CommandRegistry, Severity, SlashOutcome, BUILTIN_COMMANDS};
 use super::worker::{Worker, WorkerCommand, WorkerConfig, WorkerEvent, WorkerStatus};
+use crate::storage::Storage;
 use crate::tui::theme::Styles;
 
 pub async fn run(cfg: WorkerConfig, initial_prompt: Option<String>) -> Result<()> {
@@ -251,7 +253,15 @@ async fn run_ui(
                     if key.kind == KeyEventKind::Release {
                         continue;
                     }
-                    let action = handle_key(key.code, key.modifiers, &mut state, cmd_tx, &registry);
+                    let action = handle_key(
+                        key.code,
+                        key.modifiers,
+                        &mut state,
+                        cmd_tx,
+                        &registry,
+                        styles,
+                        harness_root.as_deref(),
+                    );
                     match action {
                         KeyAction::Continue => {}
                         KeyAction::Quit => break,
@@ -452,6 +462,8 @@ fn handle_key(
     state: &mut UiState,
     cmd_tx: &mpsc::Sender<WorkerCommand>,
     registry: &CommandRegistry,
+    styles: &Styles,
+    harness_root: Option<&camino::Utf8Path>,
 ) -> KeyAction {
     let ctrl = mods.contains(KeyModifiers::CONTROL);
     let shift = mods.contains(KeyModifiers::SHIFT);
@@ -701,7 +713,7 @@ fn handle_key(
             }
             if let Some(parsed) = slash::parse(trimmed) {
                 let outcome = slash::resolve(&parsed, registry);
-                return apply_outcome(outcome, state, cmd_tx);
+                return apply_outcome(outcome, state, cmd_tx, styles, harness_root);
             }
             state.follow_tail = true;
             let _ = cmd_tx.try_send(WorkerCommand::SendToActive {
@@ -938,6 +950,8 @@ fn apply_outcome(
     outcome: SlashOutcome,
     state: &mut UiState,
     cmd_tx: &mpsc::Sender<WorkerCommand>,
+    styles: &Styles,
+    harness_root: Option<&camino::Utf8Path>,
 ) -> KeyAction {
     match outcome {
         SlashOutcome::Consumed => KeyAction::Continue,
@@ -987,6 +1001,17 @@ fn apply_outcome(
                     )],
                 ),
                 Err(msg) => push_note(state, Severity::Error, vec![format!("/copy: {msg}")]),
+            }
+            KeyAction::Continue
+        }
+        SlashOutcome::Export { path } => {
+            match run_export(state, styles, harness_root, path) {
+                Ok(out_path) => push_note(
+                    state,
+                    Severity::Success,
+                    vec![format!("/export: wrote {out_path}")],
+                ),
+                Err(msg) => push_note(state, Severity::Error, vec![format!("/export: {msg}")]),
             }
             KeyAction::Continue
         }
@@ -1095,6 +1120,45 @@ fn copy_last_assistant(state: &UiState) -> Result<usize, String> {
     clip.set_text(content)
         .map_err(|e| format!("clipboard write failed: {e}"))?;
     Ok(count)
+}
+
+/// Drive [`html_export::export_conversation`] from the TUI. Picks an output
+/// path:
+///   * if the user supplied an explicit path, use it as-is (user bears the
+///     burden of escaping);
+///   * otherwise default to `<harness>/conversations/<uuid>/export.html` so
+///     the artefact lands beside `conversation.json` and `transcript.md`.
+///
+/// Returns the path actually written, for inclusion in the success note.
+fn run_export(
+    state: &UiState,
+    styles: &Styles,
+    harness_root: Option<&camino::Utf8Path>,
+    user_path: Option<camino::Utf8PathBuf>,
+) -> Result<camino::Utf8PathBuf, String> {
+    let Some(conv) = &state.conversation else {
+        return Err("no conversation to export yet.".to_string());
+    };
+    if conv.turns.is_empty() {
+        return Err("conversation is empty — nothing to export.".to_string());
+    }
+
+    let path = match user_path {
+        Some(p) => p,
+        None => {
+            let Some(root) = harness_root else {
+                return Err(
+                    "no harness initialised; pass an explicit path: /export <path>.".to_string(),
+                );
+            };
+            let storage = Storage::new(root.to_path_buf());
+            storage.conversation_dir(conv.id).join("export.html")
+        }
+    };
+
+    html_export::export_conversation(conv, &styles.theme, &path)
+        .map_err(|e| format!("write failed: {e}"))?;
+    Ok(path)
 }
 
 fn render(f: &mut Frame<'_>, state: &UiState, styles: &Styles) {

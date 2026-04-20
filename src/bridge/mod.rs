@@ -11,6 +11,7 @@ mod codex_backend;
 pub mod compaction;
 pub mod conversation;
 mod editor;
+mod html_export;
 mod markdown;
 mod openai_client;
 pub(crate) mod persist;
