@@ -8,7 +8,10 @@
 //!     * If the user types while a handoff is queued, user input wins.
 //!     * Rotating agents while streaming queues the rotation; it does not interrupt.
 //!     * `Ctrl+N` clears the conversation and all provider session state.
-//! - Persist every turn delta to the UI via a broadcast-style event channel.
+//! - Publish every turn delta to subscribers via the central [`EventBus`]
+//!   (see [`super::events`]). The TUI is the only subscriber today; additional
+//!   sinks (telemetry, alternative UIs, skill triggers, …) attach with one
+//!   `worker.bus().subscribe()` call and require no changes to this module.
 
 use anyhow::Result;
 use std::sync::Arc;
@@ -21,6 +24,7 @@ use super::claude_backend::ClaudeBackend;
 use super::codex_backend::CodexBackend;
 use super::compaction::{self, CompactionConfig, CompactionResult, OpenAiSummarizer, Summarizer};
 use super::conversation::{Agent, Conversation, Role, TurnStatus};
+use super::events::EventBus;
 use super::openai_client::OpenAiBackend;
 use super::persist::ConversationStore;
 
@@ -135,6 +139,15 @@ pub fn apply_handoff_template(template: &str, prev_agent: Agent, content: &str) 
         .replace("{content}", content)
 }
 
+/// Per-subscriber capacity for the central [`EventBus`].
+///
+/// `tokio::sync::broadcast` buffers `EVENT_BUS_CAPACITY` events per subscriber.
+/// 256 is comfortable headroom: typical worker emissions are 1–10 per turn, so
+/// 256 absorbs many turns of UI stalls (e.g. the user dragging the terminal).
+/// When a subscriber falls further behind, it observes a `Lagged(n)` and
+/// resumes from the oldest event still in the queue. See [`super::events`].
+const EVENT_BUS_CAPACITY: usize = 256;
+
 pub struct Worker {
     cfg: WorkerConfig,
     conversation: Conversation,
@@ -143,13 +156,13 @@ pub struct Worker {
     gpt: Arc<OpenAiBackend>,
     status: WorkerStatus,
     queued_rotation: Option<Agent>,
-    events: mpsc::Sender<WorkerEvent>,
+    bus: EventBus,
     store: ConversationStore,
     log: ChatLog,
 }
 
 impl Worker {
-    pub fn new(cfg: WorkerConfig, events: mpsc::Sender<WorkerEvent>) -> Result<Self> {
+    pub fn new(cfg: WorkerConfig) -> Result<Self> {
         let conversation = cfg
             .resume_conversation
             .clone()
@@ -170,10 +183,21 @@ impl Worker {
             gpt,
             status: WorkerStatus::Idle,
             queued_rotation: None,
-            events,
+            bus: EventBus::new(EVENT_BUS_CAPACITY),
             store,
             log,
         })
+    }
+
+    /// Cloneable handle to the worker's [`EventBus`]. Subscribe to receive every
+    /// [`WorkerEvent`] produced from this point on (events emitted before the
+    /// subscriber was created are not replayed — that's a deliberate property of
+    /// `tokio::sync::broadcast`).
+    ///
+    /// This is the only API needed to plug a new observer (telemetry sink,
+    /// secondary UI, …) into the worker — no changes to `Worker` itself.
+    pub fn bus(&self) -> EventBus {
+        self.bus.clone()
     }
 
     pub fn log_path(&self) -> Option<camino::Utf8PathBuf> {
@@ -551,10 +575,7 @@ impl Worker {
                     message: err.to_string(),
                 })
                 .await;
-                self.events
-                    .send(WorkerEvent::Error(err.to_string()))
-                    .await
-                    .ok();
+                self.bus.emit(WorkerEvent::Error(err.to_string()));
                 // Return to idle after reporting so new commands can run.
                 self.set_status(WorkerStatus::Idle).await;
             }
@@ -566,10 +587,7 @@ impl Worker {
             return;
         }
         self.status = status.clone();
-        self.events
-            .send(WorkerEvent::StatusChanged(status))
-            .await
-            .ok();
+        self.bus.emit(WorkerEvent::StatusChanged(status));
     }
 
     async fn emit_conversation(&self) {
@@ -587,18 +605,13 @@ impl Worker {
                 "codex_thread_id": self.conversation.sessions.codex_thread_id,
             }),
         );
-        self.events
-            .send(WorkerEvent::ConversationUpdated(self.conversation.clone()))
-            .await
-            .ok();
+        self.bus
+            .emit(WorkerEvent::ConversationUpdated(self.conversation.clone()));
     }
 
     async fn emit_status_message(&self, message: String) {
         self.log.write("status_message", &message);
-        self.events
-            .send(WorkerEvent::StatusMessage(message))
-            .await
-            .ok();
+        self.bus.emit(WorkerEvent::StatusMessage(message));
     }
 }
 

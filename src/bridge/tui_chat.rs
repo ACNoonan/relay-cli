@@ -68,7 +68,7 @@ use std::{
     io,
     time::Duration,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
 
 use super::conversation::{Agent, Conversation, Role, TurnStatus};
@@ -83,15 +83,18 @@ use crate::storage::Storage;
 use crate::tui::theme::Styles;
 
 pub async fn run(cfg: WorkerConfig, initial_prompt: Option<String>) -> Result<()> {
-    let (ev_tx, mut ev_rx) = mpsc::channel::<WorkerEvent>(1024);
     let (cmd_tx, cmd_rx) = mpsc::channel::<WorkerCommand>(64);
 
     // Surface these before the worker takes ownership of the config.
     let harness_root = cfg.harness_root.clone();
     let styles = Styles::load(harness_root.as_deref());
 
-    let worker = Worker::new(cfg, ev_tx)?;
+    let worker = Worker::new(cfg)?;
     let log_path = worker.log_path();
+    // Subscribe BEFORE spawning the worker — `tokio::sync::broadcast` only
+    // delivers events emitted *after* a receiver is created, and the worker
+    // emits its first conversation snapshot immediately on entering `run`.
+    let mut ev_rx = worker.bus().subscribe();
     let worker_task = tokio::spawn(async move {
         if let Err(err) = worker.run(cmd_rx).await {
             tracing::error!(%err, "chat worker exited with error");
@@ -196,7 +199,7 @@ struct SystemNote {
 }
 
 async fn run_ui(
-    rx: &mut mpsc::Receiver<WorkerEvent>,
+    rx: &mut broadcast::Receiver<WorkerEvent>,
     cmd_tx: &mpsc::Sender<WorkerCommand>,
     log_path: Option<camino::Utf8PathBuf>,
     harness_root: Option<Utf8PathBuf>,
@@ -425,21 +428,58 @@ fn dump_buffer_snapshot(
     Ok(dest.to_string_lossy().into_owned())
 }
 
-fn drain_worker_events(rx: &mut mpsc::Receiver<WorkerEvent>, state: &mut UiState) {
-    while let Ok(event) = rx.try_recv() {
-        match event {
-            WorkerEvent::ConversationUpdated(c) => {
-                state.conversation = Some(c);
+/// Pull every pending worker event off the broadcast queue and apply it to
+/// `state`. Behaviour for each [`broadcast`] error case:
+///
+///   * `TryRecvError::Empty` — no more events queued; return and let the UI
+///     redraw + poll for keystrokes.
+///   * `TryRecvError::Lagged(n)` — the bus advanced past us because the UI
+///     stalled (rendering, keypress, snapshot dump, …). The previous MPSC
+///     channel had no analogous failure mode; under broadcast we lose the
+///     intermediate events but the very next event we *will* receive is a
+///     `ConversationUpdated` snapshot (the worker emits one after every
+///     mutation), so the UI self-heals on the next iteration. We log + surface
+///     a transient status line so the user has an explanation if they're
+///     watching the status bar.
+///   * `TryRecvError::Closed` — the worker dropped its bus handle, i.e. the
+///     worker task exited. Treat the same as the old MPSC closed signal:
+///     trigger UI shutdown.
+fn drain_worker_events(rx: &mut broadcast::Receiver<WorkerEvent>, state: &mut UiState) {
+    use tokio::sync::broadcast::error::TryRecvError;
+    loop {
+        match rx.try_recv() {
+            Ok(event) => apply_worker_event(state, event),
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Lagged(n)) => {
+                tracing::warn!(
+                    skipped = n,
+                    "UI lagged behind worker bus; next snapshot will resync"
+                );
+                state.status_message =
+                    format!("ui fell behind worker by {n} events — resyncing on next snapshot");
             }
-            WorkerEvent::StatusChanged(s) => {
-                state.status = s;
+            Err(TryRecvError::Closed) => {
+                // Worker task is gone; mirror the MPSC-closed semantics.
+                state.quit_requested = true;
+                return;
             }
-            WorkerEvent::StatusMessage(m) => {
-                state.status_message = m;
-            }
-            WorkerEvent::Error(e) => {
-                state.last_error = Some(e);
-            }
+        }
+    }
+}
+
+fn apply_worker_event(state: &mut UiState, event: WorkerEvent) {
+    match event {
+        WorkerEvent::ConversationUpdated(c) => {
+            state.conversation = Some(c);
+        }
+        WorkerEvent::StatusChanged(s) => {
+            state.status = s;
+        }
+        WorkerEvent::StatusMessage(m) => {
+            state.status_message = m;
+        }
+        WorkerEvent::Error(e) => {
+            state.last_error = Some(e);
         }
     }
 }
