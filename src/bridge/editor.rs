@@ -265,14 +265,17 @@ impl<T: Clone> UndoStack<T> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// One entry in the autocomplete popup.
+///
+/// Owns its strings so user-defined skills (loaded at runtime from disk) can
+/// participate in the popup alongside the static built-in registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutocompleteItem {
     /// Command name (no leading `/`).
-    pub name: &'static str,
+    pub name: String,
     /// One-line description shown after the name.
-    pub description: &'static str,
+    pub description: String,
     /// Argument hint, e.g. `"claude | gpt | codex"`. Empty for zero-arg cmds.
-    pub args_hint: &'static str,
+    pub args_hint: String,
 }
 
 /// Slash-command completion state.
@@ -282,6 +285,11 @@ pub struct AutocompleteItem {
 /// [`SlashAutocomplete::refresh`] (after every buffer change). The popup stays
 /// open as long as the buffer starts with `/` and has no space yet.
 ///
+/// Built-ins always come first in the popup so they shadow same-named skills
+/// (matching the slash dispatcher's resolution order); skills follow in the
+/// order they were supplied by the caller (typically alphabetical, which is
+/// how `SkillRegistry::names_with_descriptions` sorts them).
+///
 /// Navigation: [`SlashAutocomplete::next`] / [`SlashAutocomplete::prev`] move
 /// the selection; [`SlashAutocomplete::accept`] returns the full replacement
 /// text (`"/<name>"`) the caller should install in the buffer.
@@ -289,6 +297,11 @@ pub struct AutocompleteItem {
 pub struct SlashAutocomplete {
     items: Vec<AutocompleteItem>,
     selected: usize,
+    /// Snapshot of the skill list this popup was built against. Held by
+    /// value so [`Self::refresh`] doesn't need a re-borrow of the registry —
+    /// the chat input refreshes on every keystroke and we want that loop to
+    /// stay borrow-free against `&mut UiState`.
+    skills: Vec<(String, String)>,
 }
 
 impl SlashAutocomplete {
@@ -299,18 +312,34 @@ impl SlashAutocomplete {
         buffer.starts_with('/') && !buffer.contains(' ')
     }
 
-    /// Create a fresh popup for the given buffer. Returns `None` when the
-    /// buffer doesn't match [`Self::should_open`] or no commands match the
-    /// prefix.
+    /// Create a fresh popup for the given buffer using only built-in commands.
+    /// Returns `None` when the buffer doesn't match [`Self::should_open`] or
+    /// no commands match the prefix.
+    ///
+    /// Production callers should prefer [`Self::new_with_skills`]; this entry
+    /// point exists for callers (and tests) that don't have a skill registry.
+    #[allow(dead_code)] // exercised by editor tests; production calls go through new_with_skills
     pub fn new(buffer: &str) -> Option<Self> {
+        Self::new_with_skills(buffer, Vec::new())
+    }
+
+    /// Like [`Self::new`] but also surfaces `skills` (`(name, description)`
+    /// pairs) as completion candidates. Skills are filtered by the same prefix
+    /// rule and rendered with a `[skill]` suffix on the description so users
+    /// can see at a glance that a candidate isn't a built-in.
+    pub fn new_with_skills(buffer: &str, skills: Vec<(String, String)>) -> Option<Self> {
         if !Self::should_open(buffer) {
             return None;
         }
-        let items = filter_commands(buffer);
+        let items = filter_all(buffer, &skills);
         if items.is_empty() {
             return None;
         }
-        Some(Self { items, selected: 0 })
+        Some(Self {
+            items,
+            selected: 0,
+            skills,
+        })
     }
 
     /// Re-filter against the current buffer. Returns `false` when the popup
@@ -320,13 +349,13 @@ impl SlashAutocomplete {
         if !Self::should_open(buffer) {
             return false;
         }
-        let items = filter_commands(buffer);
+        let items = filter_all(buffer, &self.skills);
         if items.is_empty() {
             return false;
         }
         // Try to keep the selection on the same command if it still matches;
         // otherwise clamp to the front.
-        let keep_name = self.items.get(self.selected).map(|i| i.name);
+        let keep_name = self.items.get(self.selected).map(|i| i.name.clone());
         self.items = items;
         if let Some(name) = keep_name {
             if let Some(idx) = self.items.iter().position(|i| i.name == name) {
@@ -374,7 +403,8 @@ impl SlashAutocomplete {
 }
 
 /// Case-insensitive prefix filter over the built-in registry. Preserves the
-/// canonical registry order.
+/// canonical registry order. Used as the first-pass filter in [`filter_all`];
+/// kept separate so the built-in-only test path is trivially exercisable.
 fn filter_commands(buffer: &str) -> Vec<AutocompleteItem> {
     // Strip leading `/` and lowercase for matching.
     let rest = buffer.strip_prefix('/').unwrap_or(buffer);
@@ -383,11 +413,38 @@ fn filter_commands(buffer: &str) -> Vec<AutocompleteItem> {
         .iter()
         .filter(|e| e.name.to_ascii_lowercase().starts_with(&needle))
         .map(|e| AutocompleteItem {
-            name: e.name,
-            description: e.description,
-            args_hint: e.args_hint,
+            name: e.name.to_string(),
+            description: e.description.to_string(),
+            args_hint: e.args_hint.to_string(),
         })
         .collect()
+}
+
+/// Combined built-ins + user-skills filter. Built-ins always come first; a
+/// skill whose name shadows a built-in is silently dropped from the popup
+/// (same precedence as the slash dispatcher).
+fn filter_all(buffer: &str, skills: &[(String, String)]) -> Vec<AutocompleteItem> {
+    let mut items = filter_commands(buffer);
+    let rest = buffer.strip_prefix('/').unwrap_or(buffer);
+    let needle = rest.to_ascii_lowercase();
+    let builtin_names: std::collections::HashSet<String> =
+        items.iter().map(|i| i.name.clone()).collect();
+    let builtin_set: std::collections::HashSet<&str> =
+        BUILTIN_COMMANDS.iter().map(|e| e.name).collect();
+    for (name, desc) in skills {
+        if !name.to_ascii_lowercase().starts_with(&needle) {
+            continue;
+        }
+        if builtin_set.contains(name.as_str()) || builtin_names.contains(name) {
+            continue;
+        }
+        items.push(AutocompleteItem {
+            name: name.clone(),
+            description: format!("{desc}  [skill]"),
+            args_hint: String::new(),
+        });
+    }
+    items
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -590,7 +647,7 @@ mod tests {
     #[test]
     fn filters_by_prefix() {
         let ac = SlashAutocomplete::new("/h").expect("popup");
-        let names: Vec<&str> = ac.items().iter().map(|i| i.name).collect();
+        let names: Vec<&str> = ac.items().iter().map(|i| i.name.as_str()).collect();
         assert!(names.contains(&"help"));
         assert!(names.contains(&"hotkeys"));
         assert!(names.contains(&"handoff"));
@@ -601,7 +658,7 @@ mod tests {
     #[test]
     fn filtering_is_case_insensitive() {
         let ac = SlashAutocomplete::new("/HE").expect("popup");
-        let names: Vec<&str> = ac.items().iter().map(|i| i.name).collect();
+        let names: Vec<&str> = ac.items().iter().map(|i| i.name.as_str()).collect();
         assert!(names.contains(&"help"));
     }
 

@@ -26,6 +26,7 @@ use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 
 use crate::config::HarnessConfig;
+use crate::skills::SkillRegistry;
 use crate::storage::Storage;
 use conversation::{Agent, Conversation};
 use persist::ConversationStore;
@@ -83,7 +84,10 @@ pub async fn run(options: BridgeOptions) -> Result<()> {
         Some(options.prompt.clone())
     };
 
-    tui_chat::run(cfg, initial_prompt).await
+    // `relay bridge` is the deprecated alias and runs without a discovered
+    // harness root; load global skills only.
+    let skills = SkillRegistry::load(None);
+    tui_chat::run(cfg, initial_prompt, skills).await
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +164,12 @@ pub async fn run_chat(opts: ChatOptions) -> Result<()> {
         compaction::CompactionConfig::from_toml(&toml_view).with_env_overrides()
     };
 
+    // Load skills (global + project) so they're available as `/`-commands in
+    // chat. Doing this before we move `harness_root` into the `WorkerConfig`
+    // keeps the borrow trivial; per-file load errors are surfaced through
+    // `/skills` rather than aborting startup.
+    let skills = SkillRegistry::load(Some(opts.harness_root.as_path()));
+
     let cfg = WorkerConfig {
         claude_binary: opts.claude_binary,
         codex_binary: opts.codex_binary,
@@ -174,7 +184,7 @@ pub async fn run_chat(opts: ChatOptions) -> Result<()> {
         compaction: compaction_cfg,
     };
 
-    tui_chat::run(cfg, opts.prompt).await
+    tui_chat::run(cfg, opts.prompt, skills).await
 }
 
 pub fn parse_start_with(s: &str) -> Agent {

@@ -18,6 +18,7 @@
 use camino::Utf8PathBuf;
 
 use super::conversation::Agent;
+use crate::skills::SkillRegistry;
 
 /// A successfully parsed `/name args...` line. See [`parse`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +109,7 @@ pub enum SlashCommand {
     Export,
     Handoff,
     Focus,
+    Skills,
     Quit,
 }
 
@@ -142,6 +144,13 @@ pub enum SlashOutcome {
     Handoff(Agent),
     /// Rotate focus only (no handoff).
     Focus(Agent),
+    /// List loaded skills + any per-file load errors. Rendered as a
+    /// `SystemNote`, not a worker command.
+    ShowSkills,
+    /// Invoke a user-defined skill by name. The TUI looks the name up in its
+    /// `SkillRegistry` and drives the multi-agent rotation; arguments are
+    /// passed through as the user-supplied portion of the first agent's prompt.
+    Skill { name: String, args: String },
     /// Exit the chat TUI.
     Quit,
 }
@@ -216,6 +225,12 @@ pub const BUILTIN_COMMANDS: &[BuiltinEntry] = &[
         args_hint: "claude | gpt | codex",
     },
     BuiltinEntry {
+        name: "skills",
+        description: "List loaded skills (handoff recipes) and any load errors.",
+        kind: SlashCommand::Skills,
+        args_hint: "",
+    },
+    BuiltinEntry {
         name: "quit",
         description: "Exit the chat TUI.",
         kind: SlashCommand::Quit,
@@ -252,44 +267,81 @@ impl CommandRegistry {
 
 /// Resolve a [`ParsedCommand`] against the built-in registry to an outcome.
 ///
-/// This is the pure-logic core of dispatch: given a parsed command, decide
-/// what the TUI should do. It never performs IO or mutates state; argument
+/// Pure-logic dispatch: never performs IO or mutates state. Argument
 /// validation that depends on runtime state (e.g. "no assistant message to
 /// copy") is handled by the TUI at execution time.
+///
+/// **Use [`resolve_with_skills`] when a [`SkillRegistry`] is available**;
+/// this function intentionally does NOT see skills, so callers that pass an
+/// unknown name get the "unknown command" error path. We keep it as a
+/// separate entry point so unit tests + the slash module's own tests don't
+/// have to plumb a registry through every call.
+#[allow(dead_code)] // exercised by the slash unit tests; production calls go through resolve_with_skills
 pub fn resolve(cmd: &ParsedCommand, registry: &CommandRegistry) -> SlashOutcome {
-    let Some(entry) = registry.find(&cmd.name) else {
-        return SlashOutcome::ShowMessage(
-            format!("/{}: unknown command. Try /help.", cmd.name),
-            Severity::Error,
-        );
-    };
+    resolve_inner(cmd, registry, None)
+}
 
-    match entry.kind {
-        SlashCommand::Help => SlashOutcome::ShowHelp,
-        SlashCommand::Hotkeys => SlashOutcome::ShowHotkeys,
-        SlashCommand::New => SlashOutcome::ClearConversation,
-        SlashCommand::Resume => SlashOutcome::RequireSessionPick,
-        SlashCommand::Compact => SlashOutcome::Compact,
-        SlashCommand::Copy => SlashOutcome::Copy,
-        SlashCommand::Export => {
-            let trimmed = cmd.args.trim();
-            let path = if trimmed.is_empty() {
-                None
-            } else {
-                Some(Utf8PathBuf::from(trimmed))
-            };
-            SlashOutcome::Export { path }
-        }
-        SlashCommand::Quit => SlashOutcome::Quit,
-        SlashCommand::Handoff => match parse_agent(&cmd.args) {
-            Ok(a) => SlashOutcome::Handoff(a),
-            Err(msg) => SlashOutcome::ShowMessage(msg, Severity::Error),
-        },
-        SlashCommand::Focus => match parse_agent(&cmd.args) {
-            Ok(a) => SlashOutcome::Focus(a),
-            Err(msg) => SlashOutcome::ShowMessage(msg, Severity::Error),
-        },
+/// Two-tier dispatch: built-ins first, then user-defined skills. The skill
+/// registry is borrowed; this function does not retain a reference.
+///
+/// Built-in names always shadow skills (a user can't redefine `/help`). On
+/// miss in both, returns the standard "unknown command" error.
+pub fn resolve_with_skills(
+    cmd: &ParsedCommand,
+    registry: &CommandRegistry,
+    skills: &SkillRegistry,
+) -> SlashOutcome {
+    resolve_inner(cmd, registry, Some(skills))
+}
+
+fn resolve_inner(
+    cmd: &ParsedCommand,
+    registry: &CommandRegistry,
+    skills: Option<&SkillRegistry>,
+) -> SlashOutcome {
+    if let Some(entry) = registry.find(&cmd.name) {
+        return match entry.kind {
+            SlashCommand::Help => SlashOutcome::ShowHelp,
+            SlashCommand::Hotkeys => SlashOutcome::ShowHotkeys,
+            SlashCommand::New => SlashOutcome::ClearConversation,
+            SlashCommand::Resume => SlashOutcome::RequireSessionPick,
+            SlashCommand::Compact => SlashOutcome::Compact,
+            SlashCommand::Copy => SlashOutcome::Copy,
+            SlashCommand::Export => {
+                let trimmed = cmd.args.trim();
+                let path = if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(Utf8PathBuf::from(trimmed))
+                };
+                SlashOutcome::Export { path }
+            }
+            SlashCommand::Quit => SlashOutcome::Quit,
+            SlashCommand::Skills => SlashOutcome::ShowSkills,
+            SlashCommand::Handoff => match parse_agent(&cmd.args) {
+                Ok(a) => SlashOutcome::Handoff(a),
+                Err(msg) => SlashOutcome::ShowMessage(msg, Severity::Error),
+            },
+            SlashCommand::Focus => match parse_agent(&cmd.args) {
+                Ok(a) => SlashOutcome::Focus(a),
+                Err(msg) => SlashOutcome::ShowMessage(msg, Severity::Error),
+            },
+        };
     }
+
+    if let Some(skill_reg) = skills {
+        if let Some(skill) = skill_reg.find(&cmd.name) {
+            return SlashOutcome::Skill {
+                name: skill.name.clone(),
+                args: cmd.args.clone(),
+            };
+        }
+    }
+
+    SlashOutcome::ShowMessage(
+        format!("/{}: unknown command. Try /help.", cmd.name),
+        Severity::Error,
+    )
 }
 
 /// Parse an agent name. Accepts `claude`, `gpt`, `codex` (case-insensitive).
@@ -537,7 +589,7 @@ mod tests {
         let reg = CommandRegistry::builtins();
         for name in [
             "help", "hotkeys", "new", "resume", "compact", "copy", "export", "handoff", "focus",
-            "quit",
+            "skills", "quit",
         ] {
             assert!(reg.find(name).is_some(), "missing builtin: {name}");
         }
@@ -572,5 +624,69 @@ mod tests {
                 path: Some(Utf8PathBuf::from("/tmp/out.html"))
             }
         );
+    }
+
+    #[test]
+    fn resolve_with_skills_dispatches_to_user_skill() {
+        use crate::skills::{Skill, SkillScope};
+        use camino::Utf8PathBuf;
+        use std::collections::HashMap;
+
+        let reg = CommandRegistry::builtins();
+        let skill = Skill {
+            name: "security-review".to_string(),
+            description: "claude implements, codex reviews, gpt summarizes".to_string(),
+            rotation: vec![Agent::Claude, Agent::Codex, Agent::Gpt],
+            per_agent_prompts: HashMap::new(),
+            body: String::new(),
+            source_path: Utf8PathBuf::from("/tmp/security-review.md"),
+            scope: SkillScope::Project,
+        };
+        let skills = SkillRegistry::from_parts(vec![skill], Vec::new());
+
+        // Skill name with args carries them through verbatim.
+        let out = resolve_with_skills(
+            &ParsedCommand {
+                name: "security-review".into(),
+                args: "branch=feature/x".into(),
+            },
+            &reg,
+            &skills,
+        );
+        assert_eq!(
+            out,
+            SlashOutcome::Skill {
+                name: "security-review".to_string(),
+                args: "branch=feature/x".to_string(),
+            }
+        );
+
+        // Built-ins always shadow skills — even if a user named theirs `help`.
+        let out = resolve_with_skills(
+            &ParsedCommand {
+                name: "help".into(),
+                args: "".into(),
+            },
+            &reg,
+            &skills,
+        );
+        assert_eq!(out, SlashOutcome::ShowHelp);
+
+        // A truly-unknown name still falls through to the error path.
+        let out = resolve_with_skills(
+            &ParsedCommand {
+                name: "ghost".into(),
+                args: "".into(),
+            },
+            &reg,
+            &skills,
+        );
+        match out {
+            SlashOutcome::ShowMessage(msg, sev) => {
+                assert!(msg.contains("/ghost"));
+                assert_eq!(sev, Severity::Error);
+            }
+            other => panic!("expected unknown-command error, got {other:?}"),
+        }
     }
 }

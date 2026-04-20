@@ -78,11 +78,19 @@ use super::markdown::render_markdown;
 use super::persist::ConversationStore;
 use super::session_picker;
 use super::slash::{self, CommandRegistry, Severity, SlashOutcome, BUILTIN_COMMANDS};
-use super::worker::{Worker, WorkerCommand, WorkerConfig, WorkerEvent, WorkerStatus};
+use super::worker::{
+    apply_handoff_template, Worker, WorkerCommand, WorkerConfig, WorkerEvent, WorkerStatus,
+    DEFAULT_HANDOFF_TEMPLATE,
+};
+use crate::skills::{Skill, SkillRegistry};
 use crate::storage::Storage;
 use crate::tui::theme::Styles;
 
-pub async fn run(cfg: WorkerConfig, initial_prompt: Option<String>) -> Result<()> {
+pub async fn run(
+    cfg: WorkerConfig,
+    initial_prompt: Option<String>,
+    skills: SkillRegistry,
+) -> Result<()> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<WorkerCommand>(64);
 
     // Surface these before the worker takes ownership of the config.
@@ -113,7 +121,7 @@ pub async fn run(cfg: WorkerConfig, initial_prompt: Option<String>) -> Result<()
         }
     }
 
-    let result = run_ui(&mut ev_rx, &cmd_tx, log_path, harness_root, &styles).await;
+    let result = run_ui(&mut ev_rx, &cmd_tx, log_path, harness_root, &styles, skills).await;
     // Ensure worker shuts down cleanly.
     let _ = cmd_tx.send(WorkerCommand::Quit).await;
     let _ = worker_task.await;
@@ -178,6 +186,35 @@ struct UiState {
     /// Set to `true` immediately after a yank, cleared on any other edit.
     /// Gates whether Alt+Y (yank-pop) is legal.
     last_was_yank: bool,
+
+    // ── Skills (Tier 3 #12) ─────────────────────────────────────────────────
+    /// Loaded user-defined skills. The popup, slash dispatcher and
+    /// pending-skill state machine all read from here. Cloned-at-construction
+    /// so the registry never has to be re-borrowed mid-event.
+    skills: SkillRegistry,
+    /// Tracks an in-flight skill rotation — `None` between turns and after a
+    /// skill finishes/cancels. Driven forward each time the worker returns
+    /// to `Idle`; cancelled when the user submits a free-form prompt or runs
+    /// `/new` / `/quit`.
+    pending_skill: Option<PendingSkill>,
+    /// True iff the worker has been observed leaving `Idle` since the
+    /// pending-skill machine was last advanced. Together with the next
+    /// transition back to `Idle` this gives us a clean "turn complete"
+    /// edge so we don't fire the next rotation on the very same idle event
+    /// that started us. Reset whenever a step is fired or the skill ends.
+    pending_skill_in_flight: bool,
+}
+
+/// State for an in-flight skill rotation. See [`SlashOutcome::Skill`] for the
+/// trigger and [`UiState::pending_skill`] for the lifecycle notes.
+#[derive(Debug, Clone)]
+struct PendingSkill {
+    /// Cloned at invocation so the registry is not held across events.
+    skill: Skill,
+    /// Index into `skill.rotation` of the *next* step to run. Step 0 is
+    /// fired synchronously by `apply_outcome`; subsequent steps are fired
+    /// from the event loop.
+    next_step: usize,
 }
 
 struct MarkdownCacheEntry {
@@ -204,6 +241,7 @@ async fn run_ui(
     log_path: Option<camino::Utf8PathBuf>,
     harness_root: Option<Utf8PathBuf>,
     styles: &Styles,
+    skills: SkillRegistry,
 ) -> Result<()> {
     enable_raw_mode().context("enabling raw mode for chat TUI")?;
     let mut stdout = io::stdout();
@@ -220,6 +258,7 @@ async fn run_ui(
         },
         follow_tail: true,
         log_path_banner: log_path.as_ref().map(|p| p.to_string()),
+        skills,
         ..UiState::default()
     };
 
@@ -227,7 +266,7 @@ async fn run_ui(
 
     let result: Result<()> = async {
         loop {
-            drain_worker_events(rx, &mut state);
+            drain_worker_events(rx, &mut state, cmd_tx);
             if state.quit_requested {
                 break;
             }
@@ -444,11 +483,15 @@ fn dump_buffer_snapshot(
 ///   * `TryRecvError::Closed` — the worker dropped its bus handle, i.e. the
 ///     worker task exited. Treat the same as the old MPSC closed signal:
 ///     trigger UI shutdown.
-fn drain_worker_events(rx: &mut broadcast::Receiver<WorkerEvent>, state: &mut UiState) {
+fn drain_worker_events(
+    rx: &mut broadcast::Receiver<WorkerEvent>,
+    state: &mut UiState,
+    cmd_tx: &mpsc::Sender<WorkerCommand>,
+) {
     use tokio::sync::broadcast::error::TryRecvError;
     loop {
         match rx.try_recv() {
-            Ok(event) => apply_worker_event(state, event),
+            Ok(event) => apply_worker_event(state, event, cmd_tx),
             Err(TryRecvError::Empty) => return,
             Err(TryRecvError::Lagged(n)) => {
                 tracing::warn!(
@@ -467,13 +510,45 @@ fn drain_worker_events(rx: &mut broadcast::Receiver<WorkerEvent>, state: &mut Ui
     }
 }
 
-fn apply_worker_event(state: &mut UiState, event: WorkerEvent) {
+fn apply_worker_event(
+    state: &mut UiState,
+    event: WorkerEvent,
+    cmd_tx: &mpsc::Sender<WorkerCommand>,
+) {
     match event {
         WorkerEvent::ConversationUpdated(c) => {
             state.conversation = Some(c);
         }
         WorkerEvent::StatusChanged(s) => {
+            // Track Idle ↔ non-Idle transitions for the skill state machine:
+            // when the worker leaves Idle we set `pending_skill_in_flight`,
+            // and when it returns to Idle (with that flag set) we treat that
+            // as "turn complete" and advance the rotation. This avoids firing
+            // off the next step on the leading-edge Idle that the worker
+            // emits *before* it submits the first turn.
+            let was_idle = matches!(state.status, WorkerStatus::Idle);
+            let now_idle = matches!(s, WorkerStatus::Idle);
             state.status = s;
+
+            if !was_idle {
+                // Was busy — record that we're actively in flight if a skill
+                // is pending. (We may already have set this; idempotent.)
+                if state.pending_skill.is_some() {
+                    state.pending_skill_in_flight = true;
+                }
+            }
+            if now_idle && state.pending_skill_in_flight {
+                state.pending_skill_in_flight = false;
+                advance_pending_skill(state, cmd_tx);
+            } else if !was_idle && !now_idle && state.pending_skill.is_some() {
+                state.pending_skill_in_flight = true;
+            } else if was_idle && !now_idle && state.pending_skill.is_some() {
+                // Leading edge: idle → busy. The first step of a skill is
+                // submitted by `apply_outcome`, which immediately drives us
+                // here; mark in-flight so the next idle is treated as
+                // "step complete".
+                state.pending_skill_in_flight = true;
+            }
         }
         WorkerEvent::StatusMessage(m) => {
             state.status_message = m;
@@ -481,6 +556,94 @@ fn apply_worker_event(state: &mut UiState, event: WorkerEvent) {
         WorkerEvent::Error(e) => {
             state.last_error = Some(e);
         }
+    }
+}
+
+/// Drive the pending-skill rotation forward by one step.
+///
+/// Called when the worker returns to `Idle` after a step has completed.
+/// Each step:
+///   * picks the next agent in `skill.rotation`,
+///   * builds the prompt — the worker's auto-handoff template wrapping the
+///     last assistant turn, optionally suffixed with a per-agent prompt from
+///     the skill,
+///   * if the active agent already matches the next-step agent we send the
+///     prompt directly with `SendToActive`; otherwise we rotate WITHOUT
+///     auto-handoff (`handoff_last_assistant: false`) and send the prompt
+///     ourselves so the per-agent suffix actually lands in the agent's input.
+///
+/// When the rotation is exhausted, surface a completion `SystemNote` and
+/// clear the pending state.
+fn advance_pending_skill(state: &mut UiState, cmd_tx: &mpsc::Sender<WorkerCommand>) {
+    let Some(ps) = state.pending_skill.as_ref() else {
+        return;
+    };
+    if ps.next_step >= ps.skill.rotation.len() {
+        let name = ps.skill.name.clone();
+        let steps = ps.skill.rotation.len();
+        state.pending_skill = None;
+        push_note(
+            state,
+            Severity::Success,
+            vec![format!("/{name}: completed ({steps} steps).")],
+        );
+        return;
+    }
+
+    // Need both a conversation snapshot (for the active agent + last
+    // assistant turn) and a non-empty rotation step.
+    let Some(conv) = state.conversation.as_ref() else {
+        // No conversation — nothing to seed the next step. Skill is
+        // unrunnable in this state; abort with a friendly note.
+        let name = ps.skill.name.clone();
+        state.pending_skill = None;
+        push_note(
+            state,
+            Severity::Error,
+            vec![format!("/{name}: no active conversation; aborting skill.")],
+        );
+        return;
+    };
+
+    let target = ps.skill.rotation[ps.next_step];
+    let current = conv.active_agent;
+    let last = conv.last_assistant_turn().cloned();
+    let per_agent = ps.skill.per_agent_prompts.get(&target).cloned();
+
+    // Bump the index up-front so we don't re-fire the same step if the
+    // worker emits multiple Idle transitions before the next step lands.
+    if let Some(ps_mut) = state.pending_skill.as_mut() {
+        ps_mut.next_step += 1;
+    }
+
+    let prompt = match last {
+        Some(turn) => {
+            let mut wrapped =
+                apply_handoff_template(DEFAULT_HANDOFF_TEMPLATE, turn.agent, &turn.content);
+            if let Some(extra) = &per_agent {
+                wrapped.push_str("\n\n---\n\n");
+                wrapped.push_str(extra);
+            }
+            wrapped
+        }
+        None => {
+            // No prior assistant turn to hand off — fall back to the
+            // per-agent prompt alone, or a sentinel if neither is set.
+            per_agent.unwrap_or_else(|| "continue".to_string())
+        }
+    };
+
+    if target == current {
+        let _ = cmd_tx.try_send(WorkerCommand::SendToActive { prompt });
+    } else {
+        // Manual handoff: rotate WITHOUT the worker's auto-handoff (which
+        // would clobber our per-agent suffix), then submit the prompt
+        // ourselves. Pattern matches `print_mode.rs`'s self-rotation path.
+        let _ = cmd_tx.try_send(WorkerCommand::RotateTo {
+            agent: target,
+            handoff_last_assistant: false,
+        });
+        let _ = cmd_tx.try_send(WorkerCommand::SendToActive { prompt });
     }
 }
 
@@ -752,8 +915,24 @@ fn handle_key(
                 return KeyAction::Continue;
             }
             if let Some(parsed) = slash::parse(trimmed) {
-                let outcome = slash::resolve(&parsed, registry);
+                let outcome = slash::resolve_with_skills(&parsed, registry, &state.skills);
                 return apply_outcome(outcome, state, cmd_tx, styles, harness_root);
+            }
+            // Free-form user input cancels any in-flight skill rotation —
+            // the user is steering the conversation manually now.
+            if state.pending_skill.is_some() {
+                let name = state
+                    .pending_skill
+                    .as_ref()
+                    .map(|p| p.skill.name.clone())
+                    .unwrap_or_default();
+                state.pending_skill = None;
+                state.pending_skill_in_flight = false;
+                push_note(
+                    state,
+                    Severity::Info,
+                    vec![format!("/{name}: cancelled by user input.")],
+                );
             }
             state.follow_tail = true;
             let _ = cmd_tx.try_send(WorkerCommand::SendToActive {
@@ -942,7 +1121,10 @@ fn refresh_autocomplete(state: &mut UiState) {
                 }
             }
             None => {
-                state.autocomplete = SlashAutocomplete::new(&state.input);
+                state.autocomplete = SlashAutocomplete::new_with_skills(
+                    &state.input,
+                    state.skills.names_with_descriptions(),
+                );
             }
         }
     } else {
@@ -1008,6 +1190,9 @@ fn apply_outcome(
             KeyAction::Continue
         }
         SlashOutcome::ClearConversation => {
+            // Wiping the conversation also abandons any in-flight skill —
+            // there's no prior turn left to seed handoffs from.
+            cancel_pending_skill(state, "conversation cleared");
             let _ = cmd_tx.try_send(WorkerCommand::NewConversation);
             let short = state
                 .conversation
@@ -1080,10 +1265,153 @@ fn apply_outcome(
             KeyAction::Continue
         }
         SlashOutcome::Quit => {
+            cancel_pending_skill(state, "quit");
             state.quit_requested = true;
             KeyAction::Quit
         }
+        SlashOutcome::ShowSkills => {
+            push_note(state, Severity::Info, format_skills_list(&state.skills));
+            KeyAction::Continue
+        }
+        SlashOutcome::Skill { name, args } => {
+            // Look the skill up *now* so a stale name (e.g. file deleted
+            // between resolve and apply) produces an inline error instead of
+            // a panic. We clone because the registry is borrowed by `state`
+            // for the rest of the rotation's lifetime.
+            let Some(skill) = state.skills.find(&name).cloned() else {
+                push_note(
+                    state,
+                    Severity::Error,
+                    vec![format!("/{name}: skill not found (was it removed?).")],
+                );
+                return KeyAction::Continue;
+            };
+            // If a previous skill is still mid-rotation, replace it. The user
+            // explicitly asked to start a new one; cancelling silently here
+            // beats interleaving two rotations.
+            if state.pending_skill.is_some() {
+                cancel_pending_skill(state, "superseded by new skill invocation");
+            }
+
+            let first = skill.rotation[0];
+            let per_agent = skill.per_agent_prompts.get(&first).cloned();
+            let body = skill.body.clone();
+            let display_name = skill.name.clone();
+
+            // Build the first-step prompt: skill body + user args + per-agent
+            // prompt for the first rotation slot. Empty pieces are omitted so
+            // we never send a blank line block to the agent.
+            let mut prompt_parts: Vec<String> = Vec::with_capacity(3);
+            if !body.is_empty() {
+                prompt_parts.push(body);
+            }
+            let trimmed_args = args.trim();
+            if !trimmed_args.is_empty() {
+                prompt_parts.push(format!("## User input\n\n{trimmed_args}"));
+            }
+            if let Some(extra) = per_agent {
+                prompt_parts.push(extra);
+            }
+            let prompt = if prompt_parts.is_empty() {
+                "run skill".to_string()
+            } else {
+                prompt_parts.join("\n\n---\n\n")
+            };
+
+            // Rotate first if needed (without auto-handoff — there's nothing
+            // to hand off on step 0). Then send the assembled prompt.
+            let current = state.conversation.as_ref().map(|c| c.active_agent);
+            if current != Some(first) {
+                let _ = cmd_tx.try_send(WorkerCommand::RotateTo {
+                    agent: first,
+                    handoff_last_assistant: false,
+                });
+            }
+            state.follow_tail = true;
+            let _ = cmd_tx.try_send(WorkerCommand::SendToActive { prompt });
+
+            // Record the rotation state machine so the worker's next return
+            // to `Idle` advances us to step 1.
+            state.pending_skill = Some(PendingSkill {
+                skill,
+                next_step: 1,
+            });
+            state.pending_skill_in_flight = true;
+            push_note(
+                state,
+                Severity::Info,
+                vec![format!(
+                    "/{display_name}: starting (step 1 → {}).",
+                    first.label()
+                )],
+            );
+            KeyAction::Continue
+        }
     }
+}
+
+/// Render the `/skills` body. Pure function — factored out so the format is
+/// unit-testable without standing up a TUI.
+fn format_skills_list(reg: &SkillRegistry) -> Vec<String> {
+    let skills = reg.skills();
+    let errors = reg.errors();
+
+    if skills.is_empty() && errors.is_empty() {
+        return vec![
+            "no skills loaded. drop markdown files in `<harness>/skills/` or \
+             `~/.config/relay/skills/`."
+                .to_string(),
+        ];
+    }
+
+    let mut out: Vec<String> = Vec::new();
+
+    let (n_global, n_project) = skills
+        .iter()
+        .fold((0usize, 0usize), |(g, p), s| match s.scope {
+            crate::skills::SkillScope::Global => (g + 1, p),
+            crate::skills::SkillScope::Project => (g, p + 1),
+        });
+    out.push(format!(
+        "loaded skills ({n_global} global, {n_project} project):"
+    ));
+
+    // Pad the name column so descriptions line up.
+    let max_name = skills.iter().map(|s| s.name.len()).max().unwrap_or(0);
+    for s in skills {
+        let padding = " ".repeat(max_name.saturating_sub(s.name.len()));
+        out.push(format!(
+            "  /{name}{padding}   {desc}   [{scope}]",
+            name = s.name,
+            padding = padding,
+            desc = s.description,
+            scope = s.scope.label(),
+        ));
+    }
+
+    if !errors.is_empty() {
+        out.push("errors:".to_string());
+        for e in errors {
+            out.push(format!("  {}: {}", e.path, e.message));
+        }
+    }
+
+    out
+}
+
+/// Drop the current pending skill (if any) and surface a cancellation note.
+/// The note is suppressed when there's no rotation in flight, so callers can
+/// invoke this unconditionally on `/new` / `/quit` / free-form input.
+fn cancel_pending_skill(state: &mut UiState, reason: &str) {
+    let Some(ps) = state.pending_skill.take() else {
+        return;
+    };
+    state.pending_skill_in_flight = false;
+    push_note(
+        state,
+        Severity::Info,
+        vec![format!("/{}: cancelled ({reason}).", ps.skill.name)],
+    );
 }
 
 /// Build the inline `/help` body from the registry.
@@ -1653,4 +1981,71 @@ fn hash_content(s: &str) -> u64 {
     let mut h = DefaultHasher::new();
     s.hash(&mut h);
     h.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::skills::{Skill, SkillError, SkillScope};
+    use camino::Utf8PathBuf;
+    use std::collections::HashMap;
+
+    fn skill(name: &str, desc: &str, scope: SkillScope) -> Skill {
+        Skill {
+            name: name.to_string(),
+            description: desc.to_string(),
+            rotation: vec![Agent::Claude],
+            per_agent_prompts: HashMap::new(),
+            body: String::new(),
+            source_path: Utf8PathBuf::from(format!("/tmp/{name}.md")),
+            scope,
+        }
+    }
+
+    #[test]
+    fn format_skills_list_renders_empty_registry_hint() {
+        let reg = SkillRegistry::from_parts(Vec::new(), Vec::new());
+        let out = format_skills_list(&reg);
+        assert_eq!(out.len(), 1);
+        assert!(
+            out[0].contains("no skills loaded"),
+            "expected hint, got {out:?}"
+        );
+        assert!(out[0].contains("~/.config/relay/skills/"));
+    }
+
+    #[test]
+    fn format_skills_list_renders_skills_and_errors() {
+        let reg = SkillRegistry::from_parts(
+            vec![
+                skill(
+                    "security-review",
+                    "claude implements, codex reviews, gpt summarizes",
+                    SkillScope::Project,
+                ),
+                skill("pr-prep", "format, lint, write commit", SkillScope::Global),
+            ],
+            vec![SkillError {
+                path: Utf8PathBuf::from("/conf/broken.md"),
+                message: "missing required field 'rotation'".to_string(),
+            }],
+        );
+        let out = format_skills_list(&reg);
+
+        // Header counts both scopes.
+        assert!(out[0].contains("1 global"), "got {:?}", out[0]);
+        assert!(out[0].contains("1 project"), "got {:?}", out[0]);
+
+        // Each skill line includes name, description, and scope tag.
+        let body = out.join("\n");
+        assert!(body.contains("/security-review"));
+        assert!(body.contains("[project]"));
+        assert!(body.contains("/pr-prep"));
+        assert!(body.contains("[global]"));
+
+        // Errors block surfaces the path + message verbatim.
+        assert!(body.contains("errors:"));
+        assert!(body.contains("/conf/broken.md"));
+        assert!(body.contains("missing required field 'rotation'"));
+    }
 }

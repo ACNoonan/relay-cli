@@ -13,6 +13,7 @@ pub mod provider;
 pub mod review;
 pub mod schema;
 pub mod session;
+pub mod skills;
 pub mod storage;
 pub mod testing;
 pub mod tui;
