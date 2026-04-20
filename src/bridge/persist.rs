@@ -9,7 +9,8 @@ use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 use std::fs;
 
-use super::conversation::{Conversation, Role, TurnStatus};
+use super::conversation::{Conversation, Role, TurnStatus, CONVERSATION_SCHEMA_VERSION};
+use crate::storage::migrations::conversation_registry;
 use crate::storage::Storage;
 
 pub struct ConversationStore {
@@ -54,11 +55,39 @@ impl ConversationStore {
         let path = storage.conversation_json_path(id);
         let bytes =
             fs::read(path.as_std_path()).with_context(|| format!("reading conversation {path}"))?;
-        let mut conv: Conversation =
+
+        // Parse to raw JSON first so migrations can rename/remove/add fields the
+        // typed `Conversation` no longer matches.
+        let mut raw: serde_json::Value =
             serde_json::from_slice(&bytes).context("parsing conversation json")?;
-        // Bring older on-disk formats up to the current shape transparently. This is the
-        // boundary where we honour the `CONVERSATION_SCHEMA_VERSION` contract.
-        conv.upgrade_in_place();
+
+        let registry = conversation_registry();
+        let report = registry
+            .migrate_to(&mut raw, CONVERSATION_SCHEMA_VERSION)
+            .with_context(|| format!("migrating conversation {id} at {path}"))?;
+
+        let conv: Conversation =
+            serde_json::from_value(raw).context("parsing conversation json after migration")?;
+
+        // If we upgraded, persist the new shape immediately so subsequent loads
+        // skip the migration entirely.
+        if report.upgraded() {
+            tracing::info!(
+                conversation = %conv.id,
+                from = report.starting_version,
+                to = report.final_version,
+                steps = ?report.steps_applied,
+                "migrated conversation schema"
+            );
+            if let Err(err) = self.save(&conv) {
+                tracing::warn!(
+                    conversation = %conv.id,
+                    error = %err,
+                    "failed to write migrated conversation back to disk"
+                );
+            }
+        }
+
         Ok(conv)
     }
 }
@@ -117,6 +146,65 @@ mod tests {
         std::fs::write(root.join("config.toml").as_std_path(), b"").unwrap();
         std::fs::create_dir_all(root.join("conversations").as_std_path()).unwrap();
         ConversationStore::open(Some(root))
+    }
+
+    #[test]
+    fn legacy_v1_conversation_is_migrated_on_load_and_rewritten() {
+        let tmp = TempDir::new().expect("tempdir");
+        let store = store_in(&tmp);
+        let storage = Storage::new(
+            Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).expect("tempdir path is utf-8"),
+        );
+
+        // Craft a v1 conversation.json: no `schema_version` field, no
+        // `summarized_turn_count` on turns. This matches the shape written by
+        // pre-Wave-A relay binaries.
+        let id = uuid::Uuid::new_v4();
+        let now = chrono::Utc::now().to_rfc3339();
+        let legacy = serde_json::json!({
+            "id": id.to_string(),
+            "turns": [
+                {
+                    "id": uuid::Uuid::new_v4().to_string(),
+                    "agent": "gpt",
+                    "role": "user",
+                    "content": "hi from v1",
+                    "ts": now,
+                    "status": "complete",
+                }
+            ],
+            "active_agent": "gpt",
+            "sessions": { "claude_session_id": null, "codex_thread_id": null },
+            "auto_handoff_enabled": true,
+            "summary": null,
+            "created_at": now,
+            "updated_at": now,
+        });
+        let dir = storage.conversation_dir(id);
+        std::fs::create_dir_all(dir.as_std_path()).unwrap();
+        let json_path = storage.conversation_json_path(id);
+        std::fs::write(
+            json_path.as_std_path(),
+            serde_json::to_vec_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        // Load: should run v1 -> v2 migration and return a conversation at the
+        // current schema version.
+        let loaded = store.load(id).expect("load v1 conversation");
+        assert_eq!(loaded.schema_version, CONVERSATION_SCHEMA_VERSION);
+        assert_eq!(loaded.turns.len(), 1);
+        assert_eq!(loaded.turns[0].content, "hi from v1");
+        assert!(loaded.turns[0].summarized_turn_count.is_none());
+
+        // On-disk file should have been rewritten at v2 so subsequent loads
+        // don't re-migrate.
+        let rewritten: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(json_path.as_std_path()).unwrap()).unwrap();
+        assert_eq!(
+            rewritten["schema_version"],
+            serde_json::json!(CONVERSATION_SCHEMA_VERSION)
+        );
     }
 
     #[test]

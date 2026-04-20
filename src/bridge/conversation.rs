@@ -157,8 +157,9 @@ impl AgentSessionState {
 }
 
 /// Current `conversation.json` schema version. Bump whenever the on-disk shape changes
-/// in a way that older relay binaries cannot transparently read; pair with a migration
-/// branch in [`Conversation::upgrade_in_place`].
+/// in a way that older relay binaries cannot transparently read; pair with a new
+/// [`Migration`](crate::storage::migrations::Migration) registered in
+/// [`conversation_registry`](crate::storage::migrations::conversation_registry).
 pub const CONVERSATION_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,20 +201,6 @@ impl Conversation {
             created_at: now,
             updated_at: now,
         }
-    }
-
-    /// Upgrade an in-memory `Conversation` deserialized from an older schema to the
-    /// current one. Pure transformations only: never touches disk, never loses data.
-    /// Anticipates Tier 2 #8 (centralised schema migrations) without blocking on it.
-    pub fn upgrade_in_place(&mut self) {
-        if self.schema_version < 2 {
-            // v1 → v2: introduced `Turn.summarized_turn_count`. Pre-existing turns are
-            // not summaries, so the serde default of `None` is already correct; we just
-            // bump the version marker so saves round-trip cleanly.
-            self.schema_version = 2;
-        }
-        // Future migrations chain here.
-        debug_assert!(self.schema_version == CONVERSATION_SCHEMA_VERSION);
     }
 
     pub fn append_turn(&mut self, turn: Turn) -> &Turn {
@@ -322,29 +309,6 @@ mod tests {
         let back: Turn = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.summarized_turn_count, Some(7));
         assert!(back.is_summary());
-    }
-
-    #[test]
-    fn legacy_json_without_schema_version_upgrades() {
-        // Mimic a v1 conversation.json that pre-dates the schema_version field
-        // and the summarized_turn_count flag on Turn.
-        let id = Uuid::new_v4();
-        let now = Utc::now().to_rfc3339();
-        let raw = serde_json::json!({
-            "id": id,
-            "turns": [],
-            "active_agent": "gpt",
-            "sessions": {},
-            "auto_handoff_enabled": true,
-            "summary": null,
-            "created_at": now,
-            "updated_at": now,
-        });
-        let mut conv: Conversation =
-            serde_json::from_value(raw).expect("legacy json should deserialize");
-        assert_eq!(conv.schema_version, 1);
-        conv.upgrade_in_place();
-        assert_eq!(conv.schema_version, CONVERSATION_SCHEMA_VERSION);
     }
 
     #[test]

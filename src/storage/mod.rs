@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use uuid::Uuid;
 
+pub mod migrations;
+
 /// All storage paths under .agent-harness/.
 pub struct Storage {
     root: Utf8PathBuf,
