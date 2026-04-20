@@ -10,6 +10,7 @@ mod claude_backend;
 mod codex_backend;
 pub mod compaction;
 pub mod conversation;
+mod editor;
 mod markdown;
 mod openai_client;
 pub(crate) mod persist;
