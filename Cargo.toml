@@ -53,6 +53,20 @@ dialoguer = "0.11"
 # message on the system clipboard. Small (~2.5k lines), actively maintained
 # (1Password), and cross-platform (X11/Wayland/macOS/Windows).
 arboard = "3"
+# Markdown rendering for agent messages in `relay chat`. De-facto Rust
+# CommonMark parser; pure-Rust, actively maintained. See `src/bridge/markdown.rs`.
+pulldown-cmark = { version = "0.13", default-features = false }
+# Syntax highlighting inside fenced code blocks. Uses Sublime-text grammars;
+# we preload the default syntax set + a built-in theme. `default-fancy` is
+# skipped — we ship only the plist-backed defaults to keep binary size down.
+syntect = { version = "5", default-features = false, features = [
+    "default-syntaxes",
+    "default-themes",
+    "regex-fancy",
+    "parsing",
+    "html",
+    "dump-load",
+] }
 
 [dev-dependencies]
 tempfile = "3"

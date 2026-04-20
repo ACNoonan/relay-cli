@@ -210,6 +210,65 @@ impl Styles {
             _ => Style::default().fg(self.theme.token("dim")),
         }
     }
+
+    // ---- Markdown token accessors (used by `src/bridge/markdown.rs`). -----
+    // These map the reserved `md*` tokens onto ratatui `Style`s so the chat
+    // TUI can pass strongly-typed styles into the renderer without leaking
+    // token names out of this module.
+
+    pub fn md_heading(&self) -> Style {
+        Style::default()
+            .fg(self.theme.token("mdHeading"))
+            .add_modifier(Modifier::BOLD)
+    }
+
+    pub fn md_link(&self) -> Style {
+        Style::default()
+            .fg(self.theme.token("mdLink"))
+            .add_modifier(Modifier::UNDERLINED)
+    }
+
+    pub fn md_link_url(&self) -> Style {
+        Style::default()
+            .fg(self.theme.token("mdLinkUrl"))
+            .add_modifier(Modifier::DIM)
+    }
+
+    pub fn md_code(&self) -> Style {
+        Style::default().fg(self.theme.token("mdCode"))
+    }
+
+    pub fn md_code_block(&self) -> Style {
+        Style::default().fg(self.theme.token("mdCodeBlock"))
+    }
+
+    pub fn md_code_block_border(&self) -> Style {
+        Style::default()
+            .fg(self.theme.token("mdCodeBlockBorder"))
+            .add_modifier(Modifier::DIM)
+    }
+
+    pub fn md_quote(&self) -> Style {
+        Style::default()
+            .fg(self.theme.token("mdQuote"))
+            .add_modifier(Modifier::ITALIC)
+    }
+
+    pub fn md_quote_border(&self) -> Style {
+        Style::default().fg(self.theme.token("mdQuoteBorder"))
+    }
+
+    pub fn md_hr(&self) -> Style {
+        Style::default()
+            .fg(self.theme.token("mdHr"))
+            .add_modifier(Modifier::DIM)
+    }
+
+    pub fn md_list_bullet(&self) -> Style {
+        Style::default()
+            .fg(self.theme.token("mdListBullet"))
+            .add_modifier(Modifier::BOLD)
+    }
 }
 
 // ---------------------------------------------------------------------------

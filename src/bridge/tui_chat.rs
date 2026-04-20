@@ -39,10 +39,18 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame, Terminal,
 };
-use std::{io, time::Duration};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    hash::{DefaultHasher, Hash, Hasher},
+    io,
+    time::Duration,
+};
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 use super::conversation::{Agent, Conversation, Role, TurnStatus};
+use super::markdown::render_markdown;
 use super::persist::ConversationStore;
 use super::session_picker;
 use super::slash::{self, CommandRegistry, Severity, SlashOutcome, BUILTIN_COMMANDS};
@@ -106,6 +114,20 @@ struct UiState {
     /// of the conversation log as `system`-styled lines. Not persisted —
     /// these are transient feedback, not part of the dialogue.
     system_notes: Vec<SystemNote>,
+    /// Cache of rendered markdown lines per assistant turn.
+    ///
+    /// Keyed on `turn_id`; the stored entry carries the content hash and
+    /// width that were used to render, so a changed width OR changed
+    /// content (incremental streaming update -> completion) invalidates.
+    /// Using `RefCell` so the cache can be mutated from the shared-borrow
+    /// render path (`terminal.draw` hands out `&UiState`).
+    md_cache: RefCell<HashMap<Uuid, MarkdownCacheEntry>>,
+}
+
+struct MarkdownCacheEntry {
+    content_hash: u64,
+    width: u16,
+    lines: Vec<Line<'static>>,
 }
 
 /// A single inline system message produced by the slash-command layer.
@@ -698,6 +720,10 @@ fn render_agent_ring(f: &mut Frame<'_>, area: Rect, state: &UiState) {
 
 fn render_conversation(f: &mut Frame<'_>, area: Rect, state: &UiState, styles: &Styles) {
     let mut lines: Vec<Line<'_>> = Vec::new();
+    // Width available inside the bordered block, less the 2-cell content
+    // indent we apply to every turn body line.
+    let inner_width = area.width.saturating_sub(2).max(1);
+    let md_width = inner_width.saturating_sub(2).max(10);
     if let Some(c) = &state.conversation {
         if c.turns.is_empty() {
             lines.push(Line::styled(
@@ -731,11 +757,33 @@ fn render_conversation(f: &mut Frame<'_>, area: Rect, state: &UiState, styles: &
                 Span::styled(format!("{prefix}{suffix}"), prefix_style),
                 Span::raw(""),
             ]));
-            for line in turn.content.lines() {
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::raw(line.to_string()),
-                ]));
+
+            // Only completed assistant turns get markdown rendering. During
+            // streaming we deliberately fall back to plain text — re-parsing
+            // per delta is expensive and flickers inline code/fence styles
+            // on and off as a block becomes complete. See `markdown.rs` for
+            // rationale.
+            let use_markdown = matches!(turn.role, Role::Assistant)
+                && matches!(turn.status, TurnStatus::Complete)
+                && !turn.content.is_empty();
+
+            if use_markdown {
+                let cached = cached_markdown(state, turn.id, &turn.content, md_width, styles);
+                for line in cached {
+                    // Prepend the 2-cell body indent so the styled lines
+                    // align with the plain-text path below.
+                    let mut spans: Vec<Span<'static>> = Vec::with_capacity(line.spans.len() + 1);
+                    spans.push(Span::raw("  "));
+                    spans.extend(line.spans);
+                    lines.push(Line::from(spans));
+                }
+            } else {
+                for line in turn.content.lines() {
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::raw(line.to_string()),
+                    ]));
+                }
             }
             if turn.content.is_empty() && turn.status == TurnStatus::Streaming {
                 lines.push(Line::from(vec![Span::styled(
@@ -778,7 +826,7 @@ fn render_conversation(f: &mut Frame<'_>, area: Rect, state: &UiState, styles: &
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" conversation ");
-    let inner_width = area.width.saturating_sub(2).max(1) as usize;
+    let inner_width = inner_width as usize;
     let inner_height = area.height.saturating_sub(2) as usize;
     // Paragraph.scroll counts *wrapped* rows, not logical lines. Computing scroll
     // against `lines.len()` undercounts when content wraps, which pushes the tail
@@ -875,4 +923,39 @@ fn truncate(s: &str, max: usize) -> String {
         out.push('…');
         out
     }
+}
+
+/// Fetch a cached markdown render of `content` for `turn_id` at `width`, or
+/// produce and cache one on miss. Invalidates on any change to `width` OR
+/// `content` (keyed by a default hasher over the content bytes).
+fn cached_markdown(
+    state: &UiState,
+    turn_id: Uuid,
+    content: &str,
+    width: u16,
+    styles: &Styles,
+) -> Vec<Line<'static>> {
+    let hash = hash_content(content);
+    let mut cache = state.md_cache.borrow_mut();
+    if let Some(entry) = cache.get(&turn_id) {
+        if entry.content_hash == hash && entry.width == width {
+            return entry.lines.clone();
+        }
+    }
+    let lines = render_markdown(content, width, styles);
+    cache.insert(
+        turn_id,
+        MarkdownCacheEntry {
+            content_hash: hash,
+            width,
+            lines: lines.clone(),
+        },
+    );
+    lines
+}
+
+fn hash_content(s: &str) -> u64 {
+    let mut h = DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
 }
