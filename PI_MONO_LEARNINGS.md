@@ -42,12 +42,12 @@ Critical for the GPT path specifically: per relay's README, "GPT has no server-s
 
 ## Tier 2 — pattern-level
 
-| # | Item | Pi source | Relay target |
-|---|------|-----------|--------------|
-| 6 | Central event bus | `coding-agent/src/core/event-bus.ts` (33) | replaces ad-hoc channels in `src/bridge/worker.rs` (463) |
-| 7 | HTML export | `coding-agent/src/core/export-html/` | new module; `/export` command |
-| 8 | Schema migrations | `coding-agent/src/migrations.ts` (314) | new `src/storage/migrations.rs`; versioned `conversation.json` |
-| 9 | Editor primitives | `tui/src/{kill-ring.ts, undo-stack.ts, autocomplete.ts}` | input handling in `src/bridge/tui_chat.rs` — kill-ring, undo, `/` and `@` autocomplete |
+| # | Item | Pi source | Relay target | Status |
+|---|------|-----------|--------------|--------|
+| 6 | Central event bus | `coding-agent/src/core/event-bus.ts` (33) | `src/bridge/events.rs` + worker/UI rewire | **done** — `26416c8` |
+| 7 | HTML export | `coding-agent/src/core/export-html/` | `src/bridge/html_export.rs` + `/export` command | **done** — `48f2f71` |
+| 8 | Schema migrations | `coding-agent/src/migrations.ts` (314) | `src/storage/migrations.rs` + ConversationStore::load wired | **done** — `2a00219` |
+| 9 | Editor primitives | `tui/src/{kill-ring.ts, undo-stack.ts, autocomplete.ts}` | `src/bridge/editor.rs` (kill-ring, undo, slash autocomplete; `@` deferred) | **done** — `8e22840` |
 
 ---
 
