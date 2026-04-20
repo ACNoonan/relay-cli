@@ -16,6 +16,7 @@ mod html_export;
 mod markdown;
 mod openai_client;
 pub(crate) mod persist;
+pub mod print_mode;
 pub mod session_picker;
 mod slash;
 mod tui_chat;

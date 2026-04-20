@@ -129,6 +129,9 @@ async fn main() -> anyhow::Result<()> {
             no_auto_handoff,
             resume,
             new,
+            print,
+            rotation,
+            format,
         } => {
             let resume_conversation_id = match resume {
                 Some(s) => Some(
@@ -138,6 +141,34 @@ async fn main() -> anyhow::Result<()> {
                 None => None,
             };
             let harness_root = camino::Utf8PathBuf::from(".agent-harness");
+
+            // Print mode: non-interactive, emits to stdout, then exits.
+            // `--print` + `--resume` is rejected at the clap level via
+            // `conflicts_with = "resume"`; resuming + print is intentionally
+            // a v2 feature.
+            if let Some(initial_prompt) = print {
+                let start = bridge::parse_start_with(&start_with);
+                let rotation_agents = match rotation {
+                    Some(s) => bridge::print_mode::parse_rotation(&s)?,
+                    None => vec![start],
+                };
+                let print_format = bridge::print_mode::PrintFormat::parse(&format)?;
+                let exit_code =
+                    bridge::print_mode::run_print(bridge::print_mode::PrintModeOptions {
+                        initial_prompt,
+                        rotation: rotation_agents,
+                        format: print_format,
+                        harness_dir: harness_root,
+                        claude_model,
+                        gpt_model: Some(gpt_model),
+                        claude_binary: Some(claude_binary),
+                        codex_binary: Some(codex_binary),
+                        system_prompt_file,
+                    })
+                    .await?;
+                std::process::exit(exit_code);
+            }
+
             bridge::run_chat(bridge::ChatOptions {
                 prompt,
                 start_with: bridge::parse_start_with(&start_with),

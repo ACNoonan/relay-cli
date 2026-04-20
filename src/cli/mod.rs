@@ -171,6 +171,25 @@ pub enum Commands {
         /// when prior conversations exist.
         #[arg(long, conflicts_with = "resume")]
         new: bool,
+
+        // ---- Print (non-interactive) mode ----
+        /// Run a single multi-agent rotation and emit the result to stdout
+        /// (no TUI). The argument is the initial prompt sent to the first
+        /// agent. Combine with `--rotation` to chain agents and `--format` to
+        /// control output. Exits 0 on success, non-zero on agent failure.
+        #[arg(long, value_name = "PROMPT", conflicts_with = "resume")]
+        print: Option<String>,
+        /// Comma-separated list of agents to rotate through in print mode
+        /// (e.g. `claude,codex,gpt`). Each agent runs one turn left-to-right
+        /// with auto-handoff: subsequent agents see the previous agent's
+        /// response as their prompt. Defaults to just `--start-with`.
+        #[arg(long, value_name = "LIST", requires = "print")]
+        rotation: Option<String>,
+        /// Output format for print mode. `text` (default) prints only the
+        /// final assistant message to stdout. `json` prints one JSON event
+        /// per line (NDJSON) for tooling.
+        #[arg(long, value_parser = ["text", "json"], default_value = "text", requires = "print")]
+        format: String,
     },
 }
 
